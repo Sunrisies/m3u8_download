@@ -1,0 +1,8 @@
+[package]
+name = "m3u8_downloader"
+version = "1.0.0"
+edition = "2021"
+description = "M3U8 多线程下载器 - 基于 cat-catch 扩展逻辑"
+authors = ["M3U8 Downloader"]
+
+[dependencies]
