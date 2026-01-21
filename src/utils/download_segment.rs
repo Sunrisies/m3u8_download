@@ -4,6 +4,7 @@ use std::io::Write;
 use std::path::Path;
 use url::Url;
 
+use crate::utils::json_loader::DownloadTask;
 use crate::utils::{parse_m3u8_from_source, PlaylistExt};
 
 /// 下载单个媒体片段
@@ -171,5 +172,56 @@ pub fn download_and_merge_playlist(
     //     }
     // }
 
+    Ok(())
+}
+/// 处理多个下载任务
+pub fn process_download_tasks(tasks: &[DownloadTask]) -> Result<(), String> {
+    println!("Processing {} download tasks", tasks.len());
+
+    for (i, task) in tasks.iter().enumerate() {
+        println!("Starting task {}/{}", i + 1, tasks.len());
+
+        if let Err(e) = process_download_task(task) {
+            eprintln!("Failed to process task '{}': {}", task.name, e);
+            // 继续处理下一个任务，而不是中断整个过程
+        }
+    }
+
+    println!("Completed processing {} tasks", tasks.len());
+    Ok(())
+}
+
+/// 处理单个下载任务
+pub fn process_download_task(task: &DownloadTask) -> Result<(), String> {
+    println!("Processing download task: {}", task.name);
+
+    // 确定输出目录
+    let output_dir = if task.output_dir.is_empty() {
+        format!("./downloads/{}", task.name)
+    } else {
+        format!("{}/{}", task.output_dir, task.name)
+    };
+
+    // 创建输出目录
+    if !Path::new(&output_dir).exists() {
+        fs::create_dir_all(&output_dir)
+            .map_err(|e| format!("Failed to create output directory: {}", e))?;
+    }
+
+    // 下载播放列表中的所有片段
+    let segment_files = download_playlist_segments(&task.url, &output_dir)?;
+
+    // 合并片段
+    let output_file = format!("{}/{}.ts", output_dir, task.name);
+    merge_segments(&segment_files, &output_file)?;
+
+    // 删除临时文件
+    for segment_file in &segment_files {
+        if let Err(e) = fs::remove_file(segment_file) {
+            eprintln!("Failed to remove temporary file {}: {}", segment_file, e);
+        }
+    }
+
+    println!("Successfully processed download task: {}", task.name);
     Ok(())
 }

@@ -1,4 +1,6 @@
 mod download_segment;
+pub mod json_loader;
 mod parse_m3u8;
 pub use download_segment::download_and_merge_playlist;
+pub use json_loader::load_and_process_download_tasks;
 pub use parse_m3u8::{parse_m3u8_from_source, PlaylistExt};
