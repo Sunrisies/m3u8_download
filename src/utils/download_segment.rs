@@ -12,6 +12,7 @@ pub fn download_segment(
     base_url: Option<&str>,
     output_dir: &str,
 ) -> Result<String, String> {
+    println!("开始下载:{}", segment_uri);
     // 构建完整的URL
     let url = if let Some(base) = base_url {
         // 如果提供了基础URL，则组合基础URL和片段URI
@@ -42,6 +43,11 @@ pub fn download_segment(
 
     // 构建输出文件路径
     let output_path = Path::new(output_dir).join(&filename);
+    // 检查文件是否已存在
+    if output_path.exists() {
+        println!("当前片段存在: {}", output_path.display());
+        return Ok(output_path.to_string_lossy().to_string());
+    }
 
     // 创建输出目录（如果不存在）
     if let Some(parent) = output_path.parent() {
@@ -81,7 +87,6 @@ pub fn download_playlist_segments(
 ) -> Result<Vec<String>, String> {
     // 解析M3U8播放列表
     let playlist = parse_m3u8_from_source(playlist_source)?;
-    println!("Playlist source: {}", playlist_source);
     // 获取基础URL（用于解析相对路径）
     let base_url = if let Ok(parsed_url) = Url::parse(playlist_source) {
         // 获取播放列表的目录路径作为基础URL
@@ -103,17 +108,12 @@ pub fn download_playlist_segments(
         .get_segments()
         .ok_or("Failed to get segments from playlist")?;
 
-    println!("Downloading {} segments to {}", segments.len(), output_dir);
+    println!("下载 {} 片段 {}", segments.len(), output_dir);
 
     // 下载所有片段
     let mut downloaded_files = Vec::new();
     for (i, segment) in segments.iter().enumerate() {
-        println!(
-            "Downloading segment {}/{}: {}",
-            i + 1,
-            segments.len(),
-            segment.uri
-        );
+        println!("下载片段 {}/{}: {}", i + 1, segments.len(), segment.uri);
 
         match download_segment(&segment.uri, base_url.as_deref(), output_dir) {
             Ok(path) => {
@@ -161,15 +161,15 @@ pub fn download_and_merge_playlist(
     // 下载所有片段
     let segment_files = download_playlist_segments(playlist_source, temp_dir)?;
 
-    // 合并片段
-    merge_segments(&segment_files, output_file)?;
+    // // 合并片段
+    // merge_segments(&segment_files, output_file)?;
 
-    // 可选：删除临时文件
-    for segment_file in &segment_files {
-        if let Err(e) = fs::remove_file(segment_file) {
-            eprintln!("Failed to remove temporary file {}: {}", segment_file, e);
-        }
-    }
+    // // 可选：删除临时文件
+    // for segment_file in &segment_files {
+    //     if let Err(e) = fs::remove_file(segment_file) {
+    //         eprintln!("Failed to remove temporary file {}: {}", segment_file, e);
+    //     }
+    // }
 
     Ok(())
 }
