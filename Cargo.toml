@@ -6,8 +6,21 @@ description = "M3U8 多线程下载器 - 基于 cat-catch 扩展逻辑"
 authors = ["M3U8 Downloader"]
 
 [dependencies]
-m3u8-rs = "6.0.0"
-reqwest = { version = "0.13.1", features = ["blocking"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
-url = "2.2"
+tokio = { version = "1.0", features = ["full"] }
+reqwest = { version = "0.11", features = ["stream"] }
+clap = { version = "4.0", features = ["derive"] }
+indicatif = "0.17"
+m3u8-rs = "6.0"
+url = "2.0"
+futures = "0.3"
+anyhow = "1.0"
+regex = "1.0"
+hex = "0.4"
+aes = "0.8"
+cbc = "0.1"
+sha2 = "0.10"
+async-std = "1.12"
+tempfile = "3.0"
+crossterm = "0.27"
