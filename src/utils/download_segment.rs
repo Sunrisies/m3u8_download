@@ -532,6 +532,7 @@ impl M3u8Downloader {
         }
 
         temp_file.flush()?;
+
         // 使用FFmpeg将TS转换为MP4
         // let output_path = self
         //     .download_dir
@@ -559,7 +560,12 @@ impl M3u8Downloader {
 
         // 删除临时TS文件
         fs::remove_file(&temp_ts_path).map_err(|e| anyhow!("删除临时文件失败: {}", e))?;
-
+        println!("片段已合并到临时文件: {:?}", self.download_dir);
+        if let Err(e) = fs::remove_dir_all(&self.download_dir) {
+            eprintln!("删除下载目录失败 {}: {}", self.download_dir.display(), e);
+        } else {
+            println!("已删除下载目录: {}", self.download_dir.display());
+        }
         println!("视频文件已转换为MP4: {}", output_path.display());
         // println!("视频文件已合并到: {}", output_path.display());
         Ok(())
