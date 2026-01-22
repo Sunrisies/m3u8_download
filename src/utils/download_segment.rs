@@ -7,6 +7,7 @@ use reqwest::Client;
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
@@ -30,11 +31,11 @@ pub async fn process_download_task(
 
     // 确定输出目录
     let output_dir = if task.output_dir.is_empty() {
-        format!("./output/{}", task.name)
+        format!("./output")
     } else {
         format!("{}/{}", task.output_dir, task.name)
     };
-
+    println!("输出目录是:{}", output_dir);
     // 创建输出目录
     if !Path::new(&output_dir).exists() {
         fs::create_dir_all(&output_dir)
@@ -47,14 +48,21 @@ pub async fn process_download_task(
         fs::create_dir_all(&download_dir)
             .map_err(|e| format!("Failed to create download directory: {}", e))?;
     }
-
-    println!("&task.url:{:?}", &task.url);
+    // 分离目录和文件名
+    let output_path = PathBuf::from(&output_dir);
+    // let download_dir = output_path.clone();
+    let output_filename = task.name.clone();
+    println!(
+        "&task.url:{:?},download_dir{:?},111:{:?}",
+        output_path, download_dir, output_filename
+    );
     let args = Args {
         url: task.url.clone(),
-        output: output_dir,
+        output: output_filename,
         download_dir: download_dir,
         concurrent: max_concurrent,
         retry: 4,
+        output_dir: output_dir,
     };
     let downloader = M3u8Downloader::new(args).map_err(|e| e.to_string())?;
     match downloader.download().await {
@@ -127,6 +135,8 @@ struct Args {
     /// 下载目录
     // #[arg(short, long, default_value = "download")]
     download_dir: String,
+    /// 输出目录
+    output_dir: String,
 }
 
 #[derive(Clone)]
@@ -176,16 +186,20 @@ struct M3u8Downloader {
     stats: Arc<tokio::sync::Mutex<DownloadStats>>,
     progress_bar: ProgressBar,
     output_filename: String,
+    output_dir: PathBuf,
 }
 
 impl M3u8Downloader {
     fn new(args: Args) -> Result<Self> {
         let base_url = Url::parse(&args.url)?;
         let download_dir = PathBuf::from(&args.download_dir);
-
+        let output_dir = PathBuf::from(&args.output_dir);
         // 创建下载目录
         if !download_dir.exists() {
             fs::create_dir_all(&download_dir)?;
+        }
+        if !output_dir.exists() {
+            fs::create_dir_all(&output_dir)?;
         }
 
         let client = Client::builder().timeout(Duration::from_secs(30)).build()?;
@@ -207,6 +221,7 @@ impl M3u8Downloader {
             stats: Arc::new(tokio::sync::Mutex::new(DownloadStats::new(0))),
             progress_bar,
             output_filename: args.output,
+            output_dir,
         })
     }
 
@@ -270,7 +285,7 @@ impl M3u8Downloader {
 
         // 合并文件
         println!("正在合并视频文件...");
-        self.merge_segments(segments.len()).await?;
+        self.merge_segments(&segments).await?;
 
         println!(
             "下载完成！输出文件: {}/{}.ts",
@@ -445,31 +460,70 @@ impl M3u8Downloader {
         Ok(decrypted_data.to_vec())
     }
 
-    async fn merge_segments(&self, segment_count: usize) -> Result<()> {
+    async fn merge_segments(&self, segments: &[MediaSegment]) -> Result<()> {
         let output_path = self
-            .download_dir
-            .join(format!("{}.ts", self.output_filename));
-        let mut output_file = File::create(&output_path)?;
+            .output_dir
+            .join(format!("{}.mp4", self.output_filename));
 
-        for i in 0..segment_count {
-            // 尝试查找segment_{:06}.ts格式的文件
-            let segment_path = self.download_dir.join(format!("segment_{:06}.ts", i));
+        println!("正在合并片段到: {}", output_path.display());
+        // 先合并为临时TS文件
+        let temp_ts_path = self
+            .download_dir
+            .join(format!("{}_temp.ts", self.output_filename));
+        println!("正在合并片段到临时文件: {}", temp_ts_path.display());
+        let mut temp_file = File::create(&temp_ts_path)?;
+        let mut output_file = File::create(&output_path)?;
+        for (index, segment) in segments.iter().enumerate() {
+            // 从segment.uri中提取文件名，与下载时保持一致
+            let segment_filename = Path::new(&segment.uri)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(&format!("segment_{:06}.ts", index))
+                .to_string();
+            println!("正在合并片段: {}", segment_filename);
+            let segment_path = self.download_dir.join(&segment_filename);
 
             if !segment_path.exists() {
-                // 如果找不到，尝试查找其他可能的文件名
-                // 这里我们假设文件名是按顺序的，但可能不是segment_000000.ts格式
-                // 由于我们已经修改了下载逻辑，这里应该能找到文件
                 return Err(anyhow!("片段文件不存在: {:?}", segment_path));
             }
 
             let mut segment_file = File::open(&segment_path)?;
             let mut buffer = Vec::new();
             segment_file.read_to_end(&mut buffer)?;
-            output_file.write_all(&buffer)?;
+            temp_file.write_all(&buffer)?;
         }
 
-        output_file.flush()?;
-        println!("视频文件已合并到: {}", output_path.display());
+        temp_file.flush()?;
+        // 使用FFmpeg将TS转换为MP4
+        // let output_path = self
+        //     .download_dir
+        //     .join(format!("{}.mp4", self.output_filename));
+        println!("正在转换为MP4格式: {}", output_path.display());
+
+        let output = Command::new("ffmpeg")
+            .args([
+                "-i",
+                temp_ts_path.to_str().unwrap(),
+                "-c",
+                "copy", // 直接复制流，不重新编码
+                "-bsf:a",
+                "aac_adtstoasc", // 修复AAC音频流
+                "-y",            // 覆盖输出文件
+                output_path.to_str().unwrap(),
+            ])
+            .output()
+            .map_err(|e| anyhow!("执行FFmpeg失败: {}", e))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow!("FFmpeg转换失败: {}", stderr));
+        }
+
+        // 删除临时TS文件
+        fs::remove_file(&temp_ts_path).map_err(|e| anyhow!("删除临时文件失败: {}", e))?;
+
+        println!("视频文件已转换为MP4: {}", output_path.display());
+        // println!("视频文件已合并到: {}", output_path.display());
         Ok(())
     }
 
@@ -498,6 +552,7 @@ impl M3u8Downloader {
             stats: self.stats.clone(),
             progress_bar: self.progress_bar.clone(),
             output_filename: self.output_filename.clone(),
+            output_dir: self.output_dir.clone(),
         }
     }
 }
