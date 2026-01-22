@@ -64,18 +64,24 @@ pub async fn process_download_task(
         retry: 4,
         output_dir: output_dir,
     };
-    let downloader = M3u8Downloader::new(args).map_err(|e| e.to_string())?;
-    match downloader.download().await {
-        Ok(_) => {
-            println!("✅ 下载成功完成！");
-        }
+    match M3u8Downloader::new(args) {
+        Ok(downloader) => match downloader.download().await {
+            Ok(_) => {
+                println!("✅ 下载成功完成！");
+                Ok(())
+            }
+            Err(e) => {
+                eprintln!("❌ 下载失败: {}", e);
+                Err(format!("下载失败: {}", e))
+            }
+        },
         Err(e) => {
-            eprintln!("❌ 下载失败: {}", e);
-            std::process::exit(1);
+            eprintln!("❌ 创建下载器失败: {}", e);
+            Err(format!("创建下载器失败: {}", e))
         }
     }
 
-    Ok(())
+    // Ok(())
 }
 
 // /// 处理多个下载任务（并发版）
@@ -88,17 +94,49 @@ pub async fn process_download_tasks(
         tasks.len(),
         max_concurrent
     );
+    let mut failed_tasks = Vec::new();
+    let mut successful_tasks = Vec::new();
 
     for (i, task) in tasks.iter().enumerate() {
         println!("Starting task {}/{}", i + 1, tasks.len());
-
-        if let Err(e) = process_download_task(task, max_concurrent).await {
-            eprintln!("Failed to process task '{}': {}", task.name, e);
-            // 继续处理下一个任务，而不是中断整个过程
+        match process_download_task(task, max_concurrent).await {
+            Ok(_) => {
+                successful_tasks.push(task.name.clone());
+                println!("✅ 任务 {} 处理成功", task.name);
+            }
+            Err(e) => {
+                let error_info = format!("任务 '{}' 失败: {}", task.name, e);
+                eprintln!("❌ {}", error_info);
+                failed_tasks.push((task.name.clone(), error_info));
+            }
         }
     }
 
-    println!("Completed processing {} tasks", tasks.len());
+    // 输出处理结果统计
+    println!("\n===== 处理结果统计 =====");
+    println!("总任务数: {}", tasks.len());
+    println!("成功任务数: {}", successful_tasks.len());
+    println!("失败任务数: {}", failed_tasks.len());
+
+    if !failed_tasks.is_empty() {
+        println!("\n===== 失败任务列表 =====");
+        for (name, error) in &failed_tasks {
+            println!("❌ {}: {}", name, error);
+        }
+    }
+
+    if !successful_tasks.is_empty() {
+        println!("\n===== 成功任务列表 =====");
+        for name in &successful_tasks {
+            println!("✅ {}", name);
+        }
+    }
+
+    // 如果所有任务都失败，返回错误
+    if failed_tasks.len() == tasks.len() {
+        return Err("所有任务都失败了".to_string());
+    }
+
     Ok(())
 }
 
