@@ -4,13 +4,13 @@ pub use encryption::{decrypt_segment, extract_encryption_key};
 pub use segment::merge_segments;
 
 use futures::stream::{self, StreamExt};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use clap::Parser;
 use log::{error, info};
 use tokio::{fs, time::Instant};
 
-use crate::utils::{DownloadTask, download_segment::M3u8Downloader};
+use crate::utils::{DownloadTask, download_segment::M3u8Downloader, is_already_downloaded};
 
 #[derive(Parser)]
 pub struct Args {
@@ -30,6 +30,8 @@ pub struct Args {
     pub download_dir: String,
     /// 输出目录
     pub output_dir: String,
+    /// 下载任务索引
+    pub index: usize,
 }
 #[derive(Clone)]
 pub struct DownloadStats {
@@ -71,6 +73,7 @@ impl DownloadStats {
 pub async fn process_download_task(
     task: &DownloadTask,
     max_concurrent: usize,
+    index: usize,
 ) -> Result<(), String> {
     // 确定输出目录
     let output_dir = if task.output_dir.is_empty() {
@@ -100,6 +103,7 @@ pub async fn process_download_task(
         concurrent: max_concurrent,
         retry: 4,
         output_dir: output_dir,
+        index: index,
     };
     match M3u8Downloader::new(args) {
         Ok(downloader) => match downloader.download().await {
@@ -133,15 +137,35 @@ pub async fn process_download_tasks(
     );
     let mut failed_tasks = Vec::new();
     let mut successful_tasks = Vec::new();
-
+    let download_dir = PathBuf::from("./output");
+    if !download_dir.exists() {
+        // 注意：fs::create_dir_all 接受 AsRef<Path>，PathBuf 实现了它
+        // 如果是在 async 上下文中，且使用 tokio::fs，请确保引用正确
+        // 这里假设是 tokio::fs，因为前面有 .await
+        tokio::fs::create_dir_all(&download_dir)
+            .await
+            .map_err(|e| format!("Failed to create download directory: {}", e))?;
+    }
+    let mut skipped_tasks = Vec::new();
     for (i, task) in tasks.iter().enumerate() {
+        // ← 新增：检查是否已存在
+        if is_already_downloaded(task, &download_dir) {
+            info!(
+                "⏭️ 任务 {}/{}: {} 已存在，跳过",
+                i + 1,
+                tasks.len(),
+                task.name
+            );
+            skipped_tasks.push(task.name.clone());
+            continue; // ← 关键：跳过下载
+        }
         info!(
             "正在启动任务 {}/{},当前任务是:{}",
             i + 1,
             tasks.len(),
             task.name
         );
-        match process_download_task(task, max_concurrent).await {
+        match process_download_task(task, max_concurrent, i + 1).await {
             Ok(_) => {
                 successful_tasks.push(task.name.clone());
                 info!("✅ 任务 {} 处理成功", task.name);
@@ -194,6 +218,15 @@ pub async fn process_download_tasks(
     info!("总任务数: {}", tasks.len());
     info!("成功任务数: {}", successful_tasks.len());
     info!("失败任务数: {}", failed_tasks.len());
+    info!("跳过任务数: {}", skipped_tasks.len()); // ← 新增
+
+    // 新增跳过列表
+    if !skipped_tasks.is_empty() {
+        info!("\n===== 跳过任务列表 =====");
+        for name in &skipped_tasks {
+            info!("⏭️ {} (文件已存在)", name);
+        }
+    }
 
     if !failed_tasks.is_empty() {
         info!("\n===== 失败任务列表 =====");

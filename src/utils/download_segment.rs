@@ -40,6 +40,7 @@ pub struct M3u8Downloader {
     pub progress_bar: ProgressBar,
     pub output_filename: String,
     pub output_dir: PathBuf,
+    pub index: usize,
 }
 
 impl M3u8Downloader {
@@ -47,6 +48,7 @@ impl M3u8Downloader {
         let base_url = Url::parse(&args.url)?;
         let download_dir = PathBuf::from(&args.download_dir);
         let output_dir = PathBuf::from(&args.output_dir);
+        let index = args.index;
         // 创建下载目录
         if !download_dir.exists() {
             fs::create_dir_all(&download_dir)?;
@@ -75,6 +77,7 @@ impl M3u8Downloader {
             progress_bar,
             output_filename: args.output_name,
             output_dir,
+            index,
         })
     }
 
@@ -180,7 +183,9 @@ impl M3u8Downloader {
                         self.progress_bar
                             .set_position(stats.completed_segments as u64);
                         self.progress_bar.set_message(format!(
-                            "已下载: {}/{} ({:.1}%) 速度: {:.1} KB/s",
+                            "这个是第{}个任务,名称是:{} 已下载: {}/{} ({:.1}%) 速度: {:.1} KB/s",
+                            self.index,
+                            self.output_filename,
                             stats.completed_segments,
                             stats.total_segments,
                             percentage,
@@ -307,6 +312,7 @@ impl M3u8Downloader {
             progress_bar: self.progress_bar.clone(),
             output_filename: self.output_filename.clone(),
             output_dir: self.output_dir.clone(),
+            index: self.index,
         }
     }
 }
