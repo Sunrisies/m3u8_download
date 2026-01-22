@@ -1,7 +1,8 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use clap::Parser;
 use futures::future::join_all;
 use indicatif::{ProgressBar, ProgressStyle};
+use log::{error, info};
 use m3u8_rs::{MediaPlaylist, MediaSegment};
 use reqwest::Client;
 use std::fs::{self, File};
@@ -10,16 +11,16 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
 use tokio::time::sleep;
 use url::Url;
 
 // AES解密相关
-use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
 use aes::Aes128;
+use aes::cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7};
 
-use crate::utils::json_loader::{load_download_tasks_from_json, DownloadTask};
+use crate::utils::is_valid_ts_file;
+use crate::utils::json_loader::{DownloadTask, load_download_tasks_from_json};
 
 type Aes128CbcDec = cbc::Decryptor<Aes128>;
 /// 处理单个下载任务（并发版）
@@ -27,15 +28,12 @@ pub async fn process_download_task(
     task: &DownloadTask,
     max_concurrent: usize,
 ) -> Result<(), String> {
-    println!("Processing download task: {}", task.name);
-
     // 确定输出目录
     let output_dir = if task.output_dir.is_empty() {
         format!("./output")
     } else {
         format!("{}/{}", task.output_dir, task.name)
     };
-    println!("输出目录是:{}", output_dir);
     // 创建输出目录
     if !Path::new(&output_dir).exists() {
         fs::create_dir_all(&output_dir)
@@ -48,17 +46,10 @@ pub async fn process_download_task(
         fs::create_dir_all(&download_dir)
             .map_err(|e| format!("Failed to create download directory: {}", e))?;
     }
-    // 分离目录和文件名
-    let output_path = PathBuf::from(&output_dir);
-    // let download_dir = output_path.clone();
-    let output_filename = task.name.clone();
-    println!(
-        "&task.url:{:?},download_dir{:?},111:{:?}",
-        output_path, download_dir, output_filename
-    );
+
     let args = Args {
         url: task.url.clone(),
-        output: output_filename,
+        output_name: task.name.clone(),
         download_dir: download_dir,
         concurrent: max_concurrent,
         retry: 4,
@@ -67,16 +58,16 @@ pub async fn process_download_task(
     match M3u8Downloader::new(args) {
         Ok(downloader) => match downloader.download().await {
             Ok(_) => {
-                println!("✅ 下载成功完成！");
+                info!("✅ 下载成功完成！");
                 Ok(())
             }
             Err(e) => {
-                eprintln!("❌ 下载失败: {}", e);
+                error!("❌ 下载失败: {}", e);
                 Err(format!("下载失败: {}", e))
             }
         },
         Err(e) => {
-            eprintln!("❌ 创建下载器失败: {}", e);
+            error!("❌ 创建下载器失败: {}", e);
             Err(format!("创建下载器失败: {}", e))
         }
     }
@@ -89,8 +80,8 @@ pub async fn process_download_tasks(
     tasks: &[DownloadTask],
     max_concurrent: usize,
 ) -> Result<(), String> {
-    println!(
-        "Processing {} download tasks with {} concurrent downloads",
+    info!(
+        "正在处理具有{}个并发下载的{}个下载任务",
         tasks.len(),
         max_concurrent
     );
@@ -98,37 +89,42 @@ pub async fn process_download_tasks(
     let mut successful_tasks = Vec::new();
 
     for (i, task) in tasks.iter().enumerate() {
-        println!("Starting task {}/{}", i + 1, tasks.len());
+        info!(
+            "正在启动任务 {}/{},当前任务是:{}",
+            i + 1,
+            tasks.len(),
+            task.name
+        );
         match process_download_task(task, max_concurrent).await {
             Ok(_) => {
                 successful_tasks.push(task.name.clone());
-                println!("✅ 任务 {} 处理成功", task.name);
+                info!("✅ 任务 {} 处理成功", task.name);
             }
             Err(e) => {
                 let error_info = format!("任务 '{}' 失败: {}", task.name, e);
-                eprintln!("❌ {}", error_info);
+                error!("❌ {}", error_info);
                 failed_tasks.push((task.name.clone(), error_info));
             }
         }
     }
 
     // 输出处理结果统计
-    println!("\n===== 处理结果统计 =====");
-    println!("总任务数: {}", tasks.len());
-    println!("成功任务数: {}", successful_tasks.len());
-    println!("失败任务数: {}", failed_tasks.len());
+    info!("\n===== 处理结果统计 =====");
+    info!("总任务数: {}", tasks.len());
+    info!("成功任务数: {}", successful_tasks.len());
+    info!("失败任务数: {}", failed_tasks.len());
 
     if !failed_tasks.is_empty() {
-        println!("\n===== 失败任务列表 =====");
+        info!("\n===== 失败任务列表 =====");
         for (name, error) in &failed_tasks {
-            println!("❌ {}: {}", name, error);
+            info!("❌ {}: {}", name, error);
         }
     }
 
     if !successful_tasks.is_empty() {
-        println!("\n===== 成功任务列表 =====");
+        info!("\n===== 成功任务列表 =====");
         for name in &successful_tasks {
-            println!("✅ {}", name);
+            info!("✅ {}", name);
         }
     }
 
@@ -152,26 +148,20 @@ pub async fn load_and_process_download_tasks(
 }
 
 #[derive(Parser)]
-// #[command(author, version, about, long_about = None)]
 struct Args {
     /// M3U8 播放列表 URL
-    // #[arg(short, long)]
     url: String,
 
     /// 输出文件名（不包含扩展名）
-    // #[arg(short, long, default_value = "video")]
-    output: String,
+    output_name: String,
 
     /// 并发下载数
-    // #[arg(short, long, default_value = "8")]
     concurrent: usize,
 
     /// 重试次数
-    // #[arg(short, long, default_value = "3")]
     retry: usize,
 
     /// 下载目录
-    // #[arg(short, long, default_value = "download")]
     download_dir: String,
     /// 输出目录
     output_dir: String,
@@ -181,7 +171,6 @@ struct Args {
 struct DownloadStats {
     total_segments: usize,
     completed_segments: usize,
-    total_bytes: u64,
     downloaded_bytes: u64,
     start_time: Instant,
 }
@@ -191,7 +180,6 @@ impl DownloadStats {
         Self {
             total_segments,
             completed_segments: 0,
-            total_bytes: 0,
             downloaded_bytes: 0,
             start_time: Instant::now(),
         }
@@ -258,19 +246,19 @@ impl M3u8Downloader {
             retry: args.retry,
             stats: Arc::new(tokio::sync::Mutex::new(DownloadStats::new(0))),
             progress_bar,
-            output_filename: args.output,
+            output_filename: args.output_name,
             output_dir,
         })
     }
 
     async fn download(&self) -> Result<()> {
-        println!("正在获取 M3U8 播放列表...");
+        info!("正在获取 M3U8 播放列表...");
 
         // 下载并解析 M3U8 文件
         let m3u8_content = self.download_text(&self.base_url.to_string()).await?;
         let playlist = self.parse_m3u8(&m3u8_content)?;
 
-        println!("发现 {} 个视频片段", playlist.segments.len());
+        info!("发现 {} 个视频片段", playlist.segments.len());
 
         // 更新统计信息
         {
@@ -284,7 +272,7 @@ impl M3u8Downloader {
         let key_data = self.extract_encryption_key(&m3u8_content).await?;
 
         if key_data.is_some() {
-            println!("检测到加密流，已获取密钥");
+            info!("检测到加密流，已获取密钥");
         }
 
         // 并行下载片段
@@ -322,10 +310,10 @@ impl M3u8Downloader {
         self.progress_bar.finish_with_message("所有片段下载完成");
 
         // 合并文件
-        println!("正在合并视频文件...");
+        info!("正在合并视频文件...");
         self.merge_segments(&segments).await?;
 
-        println!(
+        info!(
             "下载完成！输出文件: {}/{}.ts",
             self.download_dir.display(),
             self.output_filename
@@ -412,7 +400,7 @@ impl M3u8Downloader {
                             e
                         ));
                     }
-                    println!(
+                    error!(
                         "片段 {} 下载失败，正在重试 ({}/{})...",
                         index, retry_count, self.retry
                     );
@@ -438,18 +426,28 @@ impl M3u8Downloader {
         // 检查分段文件是否已存在
         let segment_path = self.download_dir.join(&segment_filename);
         if segment_path.exists() {
-            println!("片段 {} ({}) 已存在，跳过下载", index, segment_filename);
-            // 更新统计信息（已下载字节数）
-            {
-                let mut stats = self.stats.lock().await;
-                stats.completed_segments += 1;
-                stats.downloaded_bytes += segment_path.metadata()?.len();
+            // 校验已存在的文件是否有效
+            if is_valid_ts_file(&segment_path) {
+                info!(
+                    "片段 {} ({}) 已存在且校验通过，跳过下载",
+                    index, segment_filename
+                );
+                // 注意：这里不增加 completed_segments，由 download_segment 统一处理
+                return Ok(());
+            } else {
+                error!(
+                    "片段 {} ({}) 已存在但校验失败，将重新下载",
+                    index, segment_filename
+                );
+                // 删除损坏的文件
+                if let Err(e) = fs::remove_file(&segment_path) {
+                    error!("删除损坏文件失败 {}: {}", segment_path.display(), e);
+                }
             }
-            return Ok(());
         }
 
         let segment_url = self.resolve_url(&segment.uri)?;
-        println!("正在下载片段 {}: {}", index, segment_url);
+        // info!("正在下载片段 {}: {}", index, segment_url);
         let response = self.client.get(segment_url).send().await?;
 
         if !response.status().is_success() {
@@ -472,7 +470,7 @@ impl M3u8Downloader {
         // 保存到下载目录
         let mut file = tokio::fs::File::create(&segment_path).await?;
         file.write_all(&data).await?;
-        println!("片段 {} 已保存到 {}", index, segment_path.display());
+        // info!("片段 {} 已保存到 {}", index, segment_path.display());
 
         Ok(())
     }
@@ -503,14 +501,11 @@ impl M3u8Downloader {
             .output_dir
             .join(format!("{}.mp4", self.output_filename));
 
-        println!("正在合并片段到: {}", output_path.display());
         // 先合并为临时TS文件
         let temp_ts_path = self
             .download_dir
             .join(format!("{}_temp.ts", self.output_filename));
-        println!("正在合并片段到临时文件: {}", temp_ts_path.display());
         let mut temp_file = File::create(&temp_ts_path)?;
-        let mut output_file = File::create(&output_path)?;
         for (index, segment) in segments.iter().enumerate() {
             // 从segment.uri中提取文件名，与下载时保持一致
             let segment_filename = Path::new(&segment.uri)
@@ -518,7 +513,6 @@ impl M3u8Downloader {
                 .and_then(|name| name.to_str())
                 .unwrap_or(&format!("segment_{:06}.ts", index))
                 .to_string();
-            println!("正在合并片段: {}", segment_filename);
             let segment_path = self.download_dir.join(&segment_filename);
 
             if !segment_path.exists() {
@@ -534,11 +528,6 @@ impl M3u8Downloader {
         temp_file.flush()?;
 
         // 使用FFmpeg将TS转换为MP4
-        // let output_path = self
-        //     .download_dir
-        //     .join(format!("{}.mp4", self.output_filename));
-        println!("正在转换为MP4格式: {}", output_path.display());
-
         let output = Command::new("ffmpeg")
             .args([
                 "-i",
@@ -560,14 +549,12 @@ impl M3u8Downloader {
 
         // 删除临时TS文件
         fs::remove_file(&temp_ts_path).map_err(|e| anyhow!("删除临时文件失败: {}", e))?;
-        println!("片段已合并到临时文件: {:?}", self.download_dir);
         if let Err(e) = fs::remove_dir_all(&self.download_dir) {
-            eprintln!("删除下载目录失败 {}: {}", self.download_dir.display(), e);
+            error!("删除下载目录失败 {}: {}", self.download_dir.display(), e);
         } else {
-            println!("已删除下载目录: {}", self.download_dir.display());
+            info!("已删除下载目录: {}", self.download_dir.display());
         }
-        println!("视频文件已转换为MP4: {}", output_path.display());
-        // println!("视频文件已合并到: {}", output_path.display());
+        info!("视频文件已转换为MP4: {}", output_path.display());
         Ok(())
     }
 

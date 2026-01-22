@@ -39,35 +39,15 @@
 //     //     Err(e) => eprintln!("Error: {}", e),
 //     // }
 // }
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 mod utils;
-use utils::load_and_process_download_tasks;
+use utils::{init_logger, load_and_process_download_tasks};
 #[tokio::main]
 async fn main() -> Result<()> {
-    // let args = Args::parse();
-
-    // println!("M3U8 视频下载器");
-    // println!("==================");
-    // println!("目标 URL: {}", args.url);
-    // println!("输出文件: {}", args.output);
-    // println!("并发数: {}", args.concurrent);
-    // println!("下载目录: {}", args.download_dir);
-    // println!();
+    init_logger(); // 初始化日志
     match load_and_process_download_tasks("./examples/download_tasks.json", 8).await {
         Ok(tasks) => println!("Successfully processed all download tasks:{:?}", tasks),
         Err(e) => eprintln!("Failed to process download tasks: {}", e),
     }
-    // let downloader = M3u8Downloader::new(args)?;
-
-    // match downloader.download().await {
-    //     Ok(_) => {
-    //         println!("✅ 下载成功完成！");
-    //     }
-    //     Err(e) => {
-    //         eprintln!("❌ 下载失败: {}", e);
-    //         std::process::exit(1);
-    //     }
-    // }
-
     Ok(())
 }
