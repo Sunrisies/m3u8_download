@@ -1,85 +1,81 @@
-// use anyhow::{Result, anyhow};
-// use clap::Parser;
-// use log::{error, info};
+use anyhow::Result;
+use clap::{Parser, Subcommand};
 
 mod downloader;
-// // mod error;
-// mod utils;
-
-// use downloader::{Args, M3u8Downloader};
-// use utils::{DownloadTask, load_download_tasks_from_json};
-
-// #[tokio::main]
-// async fn main() -> Result<()> {
-//     // 初始化日志
-//     utils::init_logger();
-//     //
-//     // 处理JSON任务文件
-//     process_json_tasks("./examples/download_tasks.json", 8).await?;
-
-//     Ok(())
-// }
-
-// async fn process_json_tasks(json_path: &str, max_concurrent: usize) -> Result<()> {
-//     info!("从JSON文件加载任务: {}", json_path);
-
-//     let tasks =
-//         load_download_tasks_from_json(json_path).map_err(|e| anyhow!("加载任务失败: {}", e))?;
-
-//     info!("找到 {} 个任务", tasks.len());
-
-//     for (i, task) in tasks.iter().enumerate() {
-//         info!("正在处理任务 {}/{}: {}", i + 1, tasks.len(), task.name);
-
-//         match process_single_task_from_task(task, max_concurrent).await {
-//             Ok(_) => info!("✅ 任务 {} 完成", task.name),
-//             Err(e) => error!("❌ 任务 {} 失败: {}", task.name, e),
-//         }
-//     }
-
-//     Ok(())
-// }
-
-// async fn process_single_task_from_task(task: &DownloadTask, max_concurrent: usize) -> Result<()> {
-//     // 确定输出目录
-//     let output_dir = if task.output_dir.is_empty() {
-//         format!("./output")
-//     } else {
-//         format!("{}/{}", task.output_dir, task.name)
-//     };
-
-//     // 创建输出目录
-//     std::fs::create_dir_all(&output_dir)?;
-
-//     // 确定下载目录
-//     let download_dir = format!("./downloads/{}", task.name);
-//     std::fs::create_dir_all(&download_dir)?;
-
-//     let args = Args {
-//         url: task.url.clone(),
-//         output_name: task.name.clone(),
-//         download_dir,
-//         concurrent: max_concurrent,
-//         retry: 4,
-//         output_dir,
-//     };
-
-//     match M3u8Downloader::new(args) {
-//         Ok(downloader) => downloader.download().await,
-//         Err(e) => Err(anyhow!("创建下载器失败: {}", e)),
-//     }
-// }
-
-use anyhow::Result;
-
-use crate::utils::{download_segment::load_and_process_download_tasks, init_logger};
+mod server;
 mod utils;
+
+#[derive(Parser)]
+#[command(name = "m3u8-downloader")]
+#[command(about = "M3U8 多线程下载器", long_about = None)]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// 启动Web服务模式
+    Serve {
+        /// 监听主机
+        #[arg(short = 'H', long, default_value = "0.0.0.0")]
+        host: String,
+        
+        /// 监听端口
+        #[arg(short, long, default_value = "8080")]
+        port: u16,
+        
+        /// 最大并发下载数
+        #[arg(short, long, default_value = "8")]
+        concurrent: usize,
+    },
+    
+    /// 从JSON文件批量下载
+    Batch {
+        /// JSON任务文件路径
+        #[arg(short, long, default_value = "./examples/download_tasks.json")]
+        file: String,
+        
+        /// 最大并发下载数
+        #[arg(short, long, default_value = "8")]
+        concurrent: usize,
+    },
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    init_logger(); // 初始化日志
-    match load_and_process_download_tasks("./examples/download_tasks.json", 8).await {
-        Ok(tasks) => println!("Successfully processed all download tasks:{:?}", tasks),
-        Err(e) => eprintln!("Failed to process download tasks: {}", e),
+    // 初始化日志
+    utils::init_logger();
+    
+    let cli = Cli::parse();
+    
+    match cli.command {
+        Some(Commands::Serve { host, port, concurrent }) => {
+            log::info!("🚀 启动Web服务模式...");
+            log::info!("📡 主机: {}:{}", host, port);
+            log::info!("⚡ 最大并发数: {}", concurrent);
+            
+            server::start_server(&host, port, concurrent).await?;
+        }
+        Some(Commands::Batch { file, concurrent }) => {
+            log::info!("📦 启动批量下载模式...");
+            log::info!("📄 任务文件: {}", file);
+            log::info!("⚡ 最大并发数: {}", concurrent);
+            
+            match utils::download_segment::load_and_process_download_tasks(&file, concurrent).await {
+                Ok(_) => log::info!("✅ 所有任务已完成"),
+                Err(e) => log::error!("❌ 批量下载失败: {}", e),
+            }
+        }
+        None => {
+            // 默认启动服务模式
+            log::info!("🚀 启动Web服务模式（默认）...");
+            log::info!("📡 主机: 0.0.0.0:8080");
+            log::info!("⚡ 最大并发数: 8");
+            
+            server::start_server("0.0.0.0", 8080, 8).await?;
+        }
     }
+    
     Ok(())
 }

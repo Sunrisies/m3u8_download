@@ -125,100 +125,91 @@ pub async fn process_download_task(
     // Ok(())
 }
 
-// /// 处理多个下载任务（并发版）
+/// 处理多个下载任务（并发版）
 pub async fn process_download_tasks(
     tasks: &[DownloadTask],
     max_concurrent: usize,
 ) -> Result<(), String> {
     info!(
-        "正在处理具有{}个并发下载的{}个下载任务",
+        "正在处理{}个下载任务，最大并发数: {}",
         tasks.len(),
         max_concurrent
     );
+
     let mut failed_tasks = Vec::new();
     let mut successful_tasks = Vec::new();
+    let mut skipped_tasks = Vec::new();
+    
     let download_dir = PathBuf::from("./output");
     if !download_dir.exists() {
-        // 注意：fs::create_dir_all 接受 AsRef<Path>，PathBuf 实现了它
-        // 如果是在 async 上下文中，且使用 tokio::fs，请确保引用正确
-        // 这里假设是 tokio::fs，因为前面有 .await
         tokio::fs::create_dir_all(&download_dir)
             .await
             .map_err(|e| format!("Failed to create download directory: {}", e))?;
     }
-    let mut skipped_tasks = Vec::new();
-    for (i, task) in tasks.iter().enumerate() {
-        // ← 新增：检查是否已存在
-        if is_already_downloaded(task, &download_dir) {
-            info!(
-                "⏭️ 任务 {}/{}: {} 已存在，跳过",
-                i + 1,
-                tasks.len(),
-                task.name
-            );
-            skipped_tasks.push(task.name.clone());
-            continue; // ← 关键：跳过下载
-        }
-        info!(
-            "正在启动任务 {}/{},当前任务是:{}",
-            i + 1,
-            tasks.len(),
-            task.name
-        );
-        match process_download_task(task, max_concurrent, i + 1).await {
+
+    // 预先检查哪些任务需要跳过
+    let tasks_to_download: Vec<_> = tasks
+        .iter()
+        .enumerate()
+        .filter(|(i, task)| {
+            if is_already_downloaded(task, &download_dir) {
+                info!(
+                    "⏭️ 任务 {}/{}: {} 已存在，跳过",
+                    i + 1,
+                    tasks.len(),
+                    task.name
+                );
+                skipped_tasks.push(task.name.clone());
+                false
+            } else {
+                true
+            }
+        })
+        .collect();
+
+    if tasks_to_download.is_empty() {
+        info!("所有任务都已存在，无需下载");
+        return Ok(());
+    }
+
+    // 创建并发流：同时启动最多 max_concurrent 个任务
+    let mut stream = stream::iter(tasks_to_download.into_iter())
+        .map(|(i, task)| {
+            let name = task.name.clone();
+            async move {
+                info!(
+                    "正在启动任务 {}/{},当前任务是:{}",
+                    i + 1,
+                    tasks.len(),
+                    task.name
+                );
+                let result = process_download_task(task, max_concurrent, i + 1).await;
+                (i, name, result)
+            }
+        })
+        .buffer_unordered(max_concurrent);
+
+    // 收集结果
+    while let Some((_i, name, result)) = stream.next().await {
+        match result {
             Ok(_) => {
-                successful_tasks.push(task.name.clone());
-                info!("✅ 任务 {} 处理成功", task.name);
+                successful_tasks.push(name.clone());
+                info!("✅ 任务 {} 处理成功", name);
             }
             Err(e) => {
-                let error_info = format!("任务 '{}' 失败: {}", task.name, e);
+                let error_info = format!("任务 '{}' 失败: {}", name, e);
                 error!("❌ {}", error_info);
-                failed_tasks.push((task.name.clone(), error_info));
+                failed_tasks.push((name, error_info));
             }
         }
     }
-    // info!(
-    //     "正在处理{}个下载任务，最大并发数: {}",
-    //     tasks.len(),
-    //     max_concurrent
-    // );
-
-    // let mut failed_tasks = Vec::new();
-    // let mut successful_tasks = Vec::new();
-
-    // // 创建并发流：同时启动最多 max_concurrent 个任务
-    // let mut stream = stream::iter(tasks.iter().enumerate())
-    //     .map(|(i, task)| {
-    //         let name = task.name.clone();
-    //         async move {
-    //             // 这里才是真正的并发执行
-    //             let result = process_download_task(task, max_concurrent).await;
-    //             (i, name, result)
-    //         }
-    //     })
-    //     .buffer_unordered(max_concurrent);
-
-    // // 收集结果
-    // while let Some((i, name, result)) = stream.next().await {
-    //     match result {
-    //         Ok(_) => {
-    //             successful_tasks.push(name.clone());
-    //             info!("✅ 任务 {} 处理成功", name);
-    //         }
-    //         Err(e) => {
-    //             let error_info = format!("任务 '{}' 失败: {}", name, e);
-    //             error!("❌ {}", error_info);
-    //             failed_tasks.push((name, error_info));
-    //         }
-    //     }
-    // }
 
     // 输出处理结果统计
     info!("\n===== 处理结果统计 =====");
     info!("总任务数: {}", tasks.len());
     info!("成功任务数: {}", successful_tasks.len());
     info!("失败任务数: {}", failed_tasks.len());
-    info!("跳过任务数: {}", skipped_tasks.len()); // ← 新增
+    info!("跳过任务数: {}", skipped_tasks.len());
 
     // 新增跳过列表
     if !skipped_tasks.is_empty() {

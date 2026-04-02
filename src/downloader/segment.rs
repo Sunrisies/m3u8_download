@@ -10,11 +10,12 @@ pub async fn merge_segments(
     output_path: &PathBuf,
 ) -> Result<()> {
     use std::fs::File;
-    use std::io::{Read, Write};
+    use std::io::{BufWriter, Read, Write};
 
     // 先合并为临时TS文件
     let temp_ts_path = download_dir.join("temp.ts");
-    let mut temp_file = File::create(&temp_ts_path)?;
+    let temp_file = File::create(&temp_ts_path)?;
+    let mut writer = BufWriter::with_capacity(64 * 1024, temp_file); // 64KB缓冲区
 
     for (index, segment) in segments.iter().enumerate() {
         let segment_filename = get_segment_filename(&segment.uri, index);
@@ -27,10 +28,10 @@ pub async fn merge_segments(
         let mut segment_file = File::open(&segment_path)?;
         let mut buffer = Vec::new();
         segment_file.read_to_end(&mut buffer)?;
-        temp_file.write_all(&buffer)?;
+        writer.write_all(&buffer)?;
     }
 
-    temp_file.flush()?;
+    writer.flush()?;
 
     // 使用FFmpeg将TS转换为MP4
     use std::process::Command;

@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>M3U8 Downloader</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: { 50: '#f0f9ff', 100: '#e0f2fe', 200: '#bae6fd', 300: '#7dd3fc', 400: '#38bdf8', 500: '#0ea5e9', 600: '#0284c7', 700: '#0369a1', 800: '#075985', 900: '#0c4a6e' }
+                    }
+                }
+            }
+        }
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * { font-family: 'Inter', system-ui, sans-serif; }
+        .sidebar-link.active { background: rgba(14, 165, 233, 0.1); color: #0284c7; border-right: 3px solid #0284c7; }
+        .page { display: none; }
+        .page.active { display: block; }
+        .progress-bar { transition: width 0.5s ease; }
+        .card { animation: slideUp 0.3s ease; }
+        @keyframes slideUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #f1f5f9; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-900 min-h-screen">
+    <div class="flex h-screen overflow-hidden">
+        <!-- Sidebar -->
+        <aside class="w-64 bg-white border-r border-gray-200 flex flex-col">
+            <!-- Logo -->
+            <div class="h-16 flex items-center px-6 border-b border-gray-100">
+                <div class="flex items-center gap-3">
+                    <div class="w-8 h-8 bg-gradient-to-br from-primary-400 to-primary-600 rounded-lg flex items-center justify-center">
+                        <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+                        </svg>
+                    </div>
+                    <span class="font-semibold text-lg text-gray-800">M3U8 DL</span>
+                </div>
+            </div>
+            
+            <!-- Navigation -->
+            <nav class="flex-1 py-4 overflow-y-auto">
+                <div class="px-4 mb-2 text-xs font-semibold text-gray-400 uppercase tracking-wider">菜单</div>
+                <a href="#" onclick="showPage('dashboard')" class="sidebar-link active flex items-center gap-3 px-6 py-3 text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z"></path>
+                    </svg>
+                    <span>仪表盘</span>
+                </a>
+                <a href="#" onclick="showPage('tasks')" class="sidebar-link flex items-center gap-3 px-6 py-3 text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16"></path>
+                    </svg>
+                    <span>任务列表</span>
+                </a>
+                <a href="#" onclick="showPage('create')" class="sidebar-link flex items-center gap-3 px-6 py-3 text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+                    </svg>
+                    <span>新建任务</span>
+                </a>
+                
+                <div class="px-4 mt-6 mb-2 text-xs font-semibold text-gray-400 uppercase tracking-wider">筛选</div>
+                <a href="#" onclick="filterByStatus('all')" class="sidebar-link flex items-center gap-3 px-6 py-3 text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors">
+                    <span class="w-2 h-2 rounded-full bg-gray-400"></span>
+                    <span>全部任务</span>
+                    <span id="countAll" class="ml-auto text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">0</span>
+                </a>
+                <a href="#" onclick="filterByStatus('downloading')" class="sidebar-link flex items-center gap-3 px-6 py-3 text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors">
+                    <span class="w-2 h-2 rounded-full bg-blue-500"></span>
+                    <span>下载中</span>
+                    <span id="countDownloading" class="ml-auto text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">0</span>
+                </a>
+                <a href="#" onclick="filterByStatus('completed')" class="sidebar-link flex items-center gap-3 px-6 py-3 text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors">
+                    <span class="w-2 h-2 rounded-full bg-green-500"></span>
+                    <span>已完成</span>
+                    <span id="countCompleted" class="ml-auto text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">0</span>
+                </a>
+                <a href="#" onclick="filterByStatus('failed')" class="sidebar-link flex items-center gap-3 px-6 py-3 text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors">
+                    <span class="w-2 h-2 rounded-full bg-red-500"></span>
+                    <span>失败</span>
+                    <span id="countFailed" class="ml-auto text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">0</span>
+                </a>
+            </nav>
+            
+            <!-- Footer -->
+            <div class="p-4 border-t border-gray-100">
+                <div class="text-xs text-gray-400 text-center">v1.0.0</div>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="flex-1 flex flex-col overflow-hidden">
+            <!-- Header -->
+            <header class="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-6">
+                <div id="pageTitle" class="text-lg font-semibold text-gray-800">仪表盘</div>
+                <div class="flex items-center gap-4">
+                    <div class="relative">
+                        <input type="text" id="globalSearch" placeholder="搜索任务..." 
+                            class="w-64 bg-gray-50 border border-gray-200 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-primary-500 focus:bg-white placeholder-gray-400">
+                        <svg class="w-4 h-4 text-gray-400 absolute right-3 top-1/2 -translate-y-1/2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+                        </svg>
+                    </div>
+                    <button onclick="showPage('create')" class="bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+                        </svg>
+                        新建任务
+                    </button>
+                </div>
+            </header>
+
+            <!-- Content Area -->
+            <div class="flex-1 overflow-y-auto p-6">
+                <!-- Dashboard Page -->
+                <div id="page-dashboard" class="page active">
+                    <!-- Stats Grid -->
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+                        <div class="card bg-white rounded-xl p-6 border border-gray-200 shadow-sm">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <p class="text-gray-500 text-sm">总任务数</p>
+                                    <p id="statTotal" class="text-3xl font-bold mt-1 text-gray-800">0</p>
+                                </div>
+                                <div class="w-12 h-12 bg-gray-100 rounded-xl flex items-center justify-center">
+                                    <svg class="w-6 h-6 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path>
+                                    </svg>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="card bg-white rounded-xl p-6 border border-gray-200 shadow-sm">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <p class="text-gray-500 text-sm">下载中</p>
+                                    <p id="statDownloading" class="text-3xl font-bold mt-1 text-blue-600">0</p>
+                                </div>
+                                <div class="w-12 h-12 bg-blue-50 rounded-xl flex items-center justify-center">
+                                    <svg class="w-6 h-6 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+                                    </svg>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="card bg-white rounded-xl p-6 border border-gray-200 shadow-sm">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <p class="text-gray-500 text-sm">已完成</p>
+                                    <p id="statCompleted" class="text-3xl font-bold mt-1 text-green-600">0</p>
+                                </div>
+                                <div class="w-12 h-12 bg-green-50 rounded-xl flex items-center justify-center">
+                                    <svg class="w-6 h-6 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                                    </svg>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="card bg-white rounded-xl p-6 border border-gray-200 shadow-sm">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <p class="text-gray-500 text-sm">失败</p>
+                                    <p id="statFailed" class="text-3xl font-bold mt-1 text-red-600">0</p>
+                                </div>
+                                <div class="w-12 h-12 bg-red-50 rounded-xl flex items-center justify-center">
+                                    <svg class="w-6 h-6 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                                    </svg>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Recent Tasks -->
+                    <div class="bg-white rounded-xl border border-gray-200 shadow-sm">
+                        <div class="p-6 border-b border-gray-100">
+                            <h2 class="text-lg font-semibold text-gray-800">最近任务</h2>
+                        </div>
+                        <div id="recentTasks" class="divide-y divide-gray-100">
+                            <div class="p-12 text-center text-gray-400">暂无任务</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tasks Page -->
+                <div id="page-tasks" class="page">
+                    <div class="bg-white rounded-xl border border-gray-200 shadow-sm">
+                        <div class="p-6 border-b border-gray-100 flex items-center justify-between">
+                            <h2 class="text-lg font-semibold text-gray-800">任务列表</h2>
+                            <div class="flex gap-2">
+                                <button onclick="setTaskFilter('all')" class="task-filter-btn active px-3 py-1.5 text-sm rounded-lg bg-primary-600 text-white">全部</button>
+                                <button onclick="setTaskFilter('downloading')" class="task-filter-btn px-3 py-1.5 text-sm rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200">下载中</button>
+                                <button onclick="setTaskFilter('completed')" class="task-filter-btn px-3 py-1.5 text-sm rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200">已完成</button>
+                                <button onclick="setTaskFilter('failed')" class="task-filter-btn px-3 py-1.5 text-sm rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200">失败</button>
+                            </div>
+                        </div>
+                        <div id="taskList" class="divide-y divide-gray-100">
+                            <div class="p-12 text-center text-gray-400">暂无任务</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Create Task Page -->
+                <div id="page-create" class="page">
+                    <div class="max-w-2xl mx-auto">
+                        <div class="bg-white rounded-xl border border-gray-200 shadow-sm">
+                            <div class="p-6 border-b border-gray-100">
+                                <h2 class="text-lg font-semibold text-gray-800">新建下载任务</h2>
+                                <p class="text-gray-500 text-sm mt-1">填写M3U8链接开始下载</p>
+                            </div>
+                            <form id="createForm" class="p-6 space-y-6">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-2">任务名称 *</label>
+                                    <input type="text" name="name" required placeholder="输入视频名称"
+                                        class="w-full bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 focus:outline-none focus:border-primary-500 focus:bg-white placeholder-gray-400">
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-2">M3U8 链接 *</label>
+                                    <input type="url" name="url" required placeholder="https://example.com/video.m3u8"
+                                        class="w-full bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 focus:outline-none focus:border-primary-500 focus:bg-white placeholder-gray-400">
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-2">输出目录 <span class="text-gray-400">(可选)</span></label>
+                                    <input type="text" name="output_dir" placeholder="./output"
+                                        class="w-full bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 focus:outline-none focus:border-primary-500 focus:bg-white placeholder-gray-400">
+                                </div>
+                                <div class="flex gap-4 pt-4">
+                                    <button type="button" onclick="showPage('dashboard')" class="flex-1 px-6 py-3 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors text-gray-700">取消</button>
+                                    <button type="submit" class="flex-1 px-6 py-3 bg-primary-600 hover:bg-primary-700 rounded-lg font-medium transition-colors text-white">开始下载</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Toast -->
+    <div id="toast" class="fixed bottom-6 right-6 px-6 py-3 rounded-lg text-white text-sm font-medium shadow-xl transform translate-y-20 opacity-0 transition-all duration-300 z-50"></div>
+
+    <script>
+        let wsConnections = {};
+        let currentPage = 'dashboard';
+        let currentFilter = 'all';
+        let allTasks = [];
+
+        // Page Navigation
+        function showPage(page) {
+            document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+            document.getElementById(`page-${page}`).classList.add('active');
+            
+            document.querySelectorAll('.sidebar-link').forEach(link => {
+                link.classList.remove('active');
+                if (link.getAttribute('onclick')?.includes(`showPage('${page}')`)) {
+                    link.classList.add('active');
+                }
+            });
+
+            const titles = { dashboard: '仪表盘', tasks: '任务列表', create: '新建任务' };
+            document.getElementById('pageTitle').textContent = titles[page] || page;
+            currentPage = page;
+            
+            if (page === 'tasks') refreshTaskList();
+        }
+
+        // Filter by status from sidebar
+        function filterByStatus(status) {
+            currentFilter = status;
+            showPage('tasks');
+            updateTaskFilterButtons();
+            refreshTaskList();
+        }
+
+        // Set task filter from buttons
+        function setTaskFilter(status) {
+            currentFilter = status;
+            updateTaskFilterButtons();
+            refreshTaskList();
+        }
+
+        function updateTaskFilterButtons() {
+            document.querySelectorAll('.task-filter-btn').forEach(btn => {
+                const isActive = btn.getAttribute('onclick')?.includes(`'${currentFilter}'`);
+                if (isActive) {
+                    btn.classList.add('bg-primary-600', 'text-white');
+                    btn.classList.remove('bg-gray-100', 'text-gray-600');
+                } else {
+                    btn.classList.remove('bg-primary-600', 'text-white');
+                    btn.classList.add('bg-gray-100', 'text-gray-600');
+                }
+            });
+        }
+
+        // Toast
+        function showToast(msg, type = 'success') {
+            const toast = document.getElementById('toast');
+            toast.textContent = msg;
+            toast.className = `fixed bottom-6 right-6 px-6 py-3 rounded-lg text-white text-sm font-medium shadow-xl transition-all duration-300 z-50 ${type === 'success' ? 'bg-green-600' : 'bg-red-600'}`;
+            toast.style.transform = 'translateY(0)';
+            toast.style.opacity = '1';
+            setTimeout(() => {
+                toast.style.transform = 'translateY(20px)';
+                toast.style.opacity = '0';
+            }, 3000);
+        }
+
+        // Format helpers
+        function formatSize(bytes) {
+            if (!bytes) return '-';
+            const units = ['B', 'KB', 'MB', 'GB'];
+            let i = 0;
+            while (bytes >= 1024 && i < units.length - 1) { bytes /= 1024; i++; }
+            return bytes.toFixed(1) + ' ' + units[i];
+        }
+        function formatTime(str) { return new Date(str).toLocaleString('zh-CN'); }
+        function escapeHtml(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
+
+        function getStatusBadge(status) {
+            const map = {
+                pending: { text: '等待中', class: 'bg-yellow-100 text-yellow-700' },
+                downloading: { text: '下载中', class: 'bg-blue-100 text-blue-700' },
+                completed: { text: '已完成', class: 'bg-green-100 text-green-700' },
+                failed: { text: '失败', class: 'bg-red-100 text-red-700' }
+            };
+            const s = map[status] || { text: status, class: 'bg-gray-100 text-gray-700' };
+            return `<span class="px-2.5 py-1 rounded-full text-xs font-medium ${s.class}">${s.text}</span>`;
+        }
+
+        function renderTaskRow(task) {
+            const progress = Math.min(100, Math.max(0, task.progress));
+            const progressColor = task.status === 'completed' ? 'bg-green-500' : task.status === 'failed' ? 'bg-red-500' : 'bg-primary-500';
+            
+            return `
+                <div class="task-row p-4 hover:bg-gray-50 transition-colors" data-id="${task.id}">
+                    <div class="flex items-center gap-4">
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-center gap-3 mb-2">
+                                ${getStatusBadge(task.status)}
+                                <span class="font-medium text-gray-800 truncate">${escapeHtml(task.name)}</span>
+                            </div>
+                            <div class="text-xs text-gray-400 truncate mb-3">${escapeHtml(task.url)}</div>
+                            <div class="flex items-center gap-3">
+                                <div class="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                                    <div class="progress-bar h-full rounded-full ${progressColor}" style="width: ${progress}%"></div>
+                                </div>
+                                <span class="text-xs text-gray-500 w-12 text-right">${progress.toFixed(0)}%</span>
+                            </div>
+                            ${task.error ? `<div class="text-xs text-red-500 mt-2">${escapeHtml(task.error)}</div>` : ''}
+                        </div>
+                        <div class="flex items-center gap-4">
+                            ${task.file_size ? `<span class="text-xs text-gray-400">${formatSize(task.file_size)}</span>` : ''}
+                            <span class="text-xs text-gray-400">${formatTime(task.created_at)}</span>
+                            ${task.status !== 'completed' ? `
+                                <button onclick="deleteTask('${task.id}')" class="p-2 text-gray-400 hover:text-red-500 transition-colors">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                                    </svg>
+                                </button>
+                            ` : ''}
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderDashboardTask(task) {
+            const progress = Math.min(100, Math.max(0, task.progress));
+            return `
+                <div class="p-4 hover:bg-gray-50 transition-colors flex items-center gap-4" data-id="${task.id}">
+                    <div class="flex-1 min-w-0">
+                        <div class="flex items-center gap-3">
+                            ${getStatusBadge(task.status)}
+                            <span class="font-medium text-gray-800 truncate">${escapeHtml(task.name)}</span>
+                        </div>
+                    </div>
+                    <div class="w-32">
+                        <div class="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                            <div class="progress-bar h-full rounded-full bg-primary-500" style="width: ${progress}%"></div>
+                        </div>
+                    </div>
+                    <span class="text-xs text-gray-500 w-16 text-right">${progress.toFixed(0)}%</span>
+                </div>
+            `;
+        }
+
+        // Refresh data
+        async function refreshData() {
+            try {
+                const [tasksRes, statsRes] = await Promise.all([
+                    fetch('/api/tasks'),
+                    fetch('/api/tasks/stats')
+                ]);
+                allTasks = await tasksRes.json();
+                const stats = await statsRes.json();
+
+                // Update stats
+                document.getElementById('statTotal').textContent = stats.total;
+                document.getElementById('statDownloading').textContent = stats.downloading;
+                document.getElementById('statCompleted').textContent = stats.completed;
+                document.getElementById('statFailed').textContent = stats.failed;
+                
+                // Update sidebar counts
+                document.getElementById('countAll').textContent = stats.total;
+                document.getElementById('countDownloading').textContent = stats.downloading;
+                document.getElementById('countCompleted').textContent = stats.completed;
+                document.getElementById('countFailed').textContent = stats.failed;
+
+                // Update dashboard recent tasks
+                const recent = allTasks.slice(0, 5);
+                document.getElementById('recentTasks').innerHTML = recent.length 
+                    ? recent.map(renderDashboardTask).join('')
+                    : '<div class="p-12 text-center text-gray-400">暂无任务</div>';
+
+                // Update task list if on tasks page
+                if (currentPage === 'tasks') refreshTaskList();
+
+                // Connect WebSocket
+                allTasks.forEach(t => {
+                    if ((t.status === 'downloading' || t.status === 'pending') && !wsConnections[t.id]) {
+                        connectWebSocket(t.id);
+                    }
+                });
+            } catch (e) { console.error(e); }
+        }
+
+        function refreshTaskList() {
+            const search = document.getElementById('globalSearch').value.toLowerCase();
+            let filtered = allTasks;
+            
+            if (currentFilter !== 'all') {
+                filtered = filtered.filter(t => t.status === currentFilter);
+            }
+            if (search) {
+                filtered = filtered.filter(t => 
+                    t.name.toLowerCase().includes(search) || 
+                    t.url.toLowerCase().includes(search)
+                );
+            }
+
+            document.getElementById('taskList').innerHTML = filtered.length
+                ? filtered.map(renderTaskRow).join('')
+                : '<div class="p-12 text-center text-gray-400">暂无任务</div>';
+        }
+
+        // WebSocket
+        function connectWebSocket(id) {
+            if (wsConnections[id]) return;
+            const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const ws = new WebSocket(`${proto}//${location.host}/api/tasks/${id}/ws`);
+            wsConnections[id] = ws;
+            ws.onmessage = e => {
+                const task = JSON.parse(e.data);
+                updateTaskInDOM(task);
+                if (task.status === 'completed') showToast(`"${task.name}" 下载完成`);
+                if (task.status === 'failed') showToast(`"${task.name}" 下载失败`, 'error');
+            };
+            ws.onclose = () => delete wsConnections[id];
+            ws.onerror = () => delete wsConnections[id];
+        }
+
+        function updateTaskInDOM(task) {
+            document.querySelectorAll(`[data-id="${task.id}"]`).forEach(el => {
+                const temp = document.createElement('div');
+                temp.innerHTML = el.classList.contains('task-row') ? renderTaskRow(task) : renderDashboardTask(task);
+                el.replaceWith(temp.firstElementChild);
+            });
+        }
+
+        async function deleteTask(id) {
+            if (!confirm('确定删除此任务？')) return;
+            try {
+                const res = await fetch(`/api/tasks/${id}`, { method: 'DELETE' });
+                if (res.ok) {
+                    showToast('任务已删除');
+                    wsConnections[id]?.close();
+                    delete wsConnections[id];
+                    refreshData();
+                }
+            } catch { showToast('删除失败', 'error'); }
+        }
+
+        // Form submit
+        document.getElementById('createForm').addEventListener('submit', async e => {
+            e.preventDefault();
+            const fd = new FormData(e.target);
+            try {
+                const res = await fetch('/api/download', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name: fd.get('name'),
+                        url: fd.get('url'),
+                        output_dir: fd.get('output_dir') || undefined
+                    })
+                });
+                const result = await res.json();
+                if (res.ok) {
+                    showToast('任务创建成功');
+                    e.target.reset();
+                    connectWebSocket(result.id);
+                    showPage('dashboard');
+                    refreshData();
+                } else {
+                    showToast(result.error || '创建失败', 'error');
+                }
+            } catch { showToast('请求失败', 'error'); }
+        });
+
+        // Search
+        document.getElementById('globalSearch').addEventListener('input', () => {
+            clearTimeout(window.searchTimeout);
+            window.searchTimeout = setTimeout(() => {
+                if (currentPage === 'tasks') refreshTaskList();
+            }, 300);
+        });
+
+        // Init
+        refreshData();
+        setInterval(refreshData, 5000);
+    </script>
+</body>
+</html>

@@ -30,6 +30,8 @@ pub async fn load_and_process_download_tasks(
     process_download_tasks(&tasks, max_concurrent).await
 }
 
+pub type ProgressCallback = Arc<dyn Fn(f64) + Send + Sync>;
+
 pub struct M3u8Downloader {
     pub client: Client,
     pub base_url: Url,
@@ -41,6 +43,7 @@ pub struct M3u8Downloader {
     pub output_filename: String,
     pub output_dir: PathBuf,
     pub index: usize,
+    pub progress_callback: Option<ProgressCallback>,
 }
 
 impl M3u8Downloader {
@@ -57,7 +60,14 @@ impl M3u8Downloader {
             fs::create_dir_all(&output_dir)?;
         }
 
-        let client = Client::builder().timeout(Duration::from_secs(30)).build()?;
+        let client = Client::builder()
+            .timeout(Duration::from_secs(30))
+            .connect_timeout(Duration::from_secs(10))
+            .pool_idle_timeout(Duration::from_secs(90))
+            .pool_max_idle_per_host(32)
+            .tcp_keepalive(Duration::from_secs(60))
+            .tcp_nodelay(true)
+            .build()?;
 
         let progress_bar = ProgressBar::new(100);
         progress_bar.set_style(
@@ -78,7 +88,13 @@ impl M3u8Downloader {
             output_filename: args.output_name,
             output_dir,
             index,
+            progress_callback: None,
         })
+    }
+
+    pub fn with_progress_callback(mut self, callback: ProgressCallback) -> Self {
+        self.progress_callback = Some(callback);
+        self
     }
 
     pub async fn download(&self) -> Result<()> {
@@ -191,6 +207,11 @@ impl M3u8Downloader {
                             percentage,
                             speed / 1024.0
                         ));
+
+                        // 调用进度回调
+                        if let Some(callback) = &self.progress_callback {
+                            callback(percentage);
+                        }
                     }
                     return Ok(());
                 }
@@ -208,7 +229,9 @@ impl M3u8Downloader {
                         "片段 {} 下载失败，正在重试 ({}/{})...",
                         index, retry_count, self.retry
                     );
-                    sleep(Duration::from_millis(1000 * retry_count as u64)).await;
+                    // 指数退避：1s, 2s, 4s, 8s...
+                    let delay_ms = 1000 * (1 << (retry_count - 1));
+                    sleep(Duration::from_millis(delay_ms as u64)).await;
                 }
             }
         }
@@ -271,12 +294,15 @@ impl M3u8Downloader {
         }
 
         // 保存到下载目录
-        let mut file = tokio::fs::File::create(&segment_path).await?;
-        file.write_all(&data).await?;
+        let file = tokio::fs::File::create(&segment_path).await?;
+        let mut writer = tokio::io::BufWriter::with_capacity(64 * 1024, file); // 64KB缓冲区
+        writer.write_all(&data).await?;
+        writer.flush().await?;
         // info!("片段 {} 已保存到 {}", index, segment_path.display());
 
         Ok(())
     }
+    
     async fn merge_segments(&self, segments: &[m3u8_rs::MediaSegment]) -> Result<()> {
         let output_path = self
             .output_dir
@@ -313,6 +339,7 @@ impl M3u8Downloader {
             output_filename: self.output_filename.clone(),
             output_dir: self.output_dir.clone(),
             index: self.index,
+            progress_callback: self.progress_callback.clone(),
         }
     }
 }
