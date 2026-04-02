@@ -44,6 +44,7 @@ pub struct M3u8Downloader {
     pub output_dir: PathBuf,
     pub index: usize,
     pub progress_callback: Option<ProgressCallback>,
+    pub current_base_url: Arc<tokio::sync::Mutex<Url>>,
 }
 
 impl M3u8Downloader {
@@ -60,6 +61,14 @@ impl M3u8Downloader {
             fs::create_dir_all(&output_dir)?;
         }
 
+        // 从URL提取origin作为Referer
+        let origin = format!(
+            "{}://{}",
+            base_url.scheme(),
+            base_url.host_str().unwrap_or("")
+        );
+        let referer = format!("{}/", origin);
+
         let client = Client::builder()
             .timeout(Duration::from_secs(30))
             .connect_timeout(Duration::from_secs(10))
@@ -67,6 +76,16 @@ impl M3u8Downloader {
             .pool_max_idle_per_host(32)
             .tcp_keepalive(Duration::from_secs(60))
             .tcp_nodelay(true)
+
+            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+            .default_headers({
+                let mut headers = reqwest::header::HeaderMap::new();
+                headers.insert(reqwest::header::REFERER, reqwest::header::HeaderValue::from_str(&referer).unwrap());
+                headers.insert(reqwest::header::ACCEPT, reqwest::header::HeaderValue::from_static("*/*"));
+                headers.insert(reqwest::header::ACCEPT_LANGUAGE, reqwest::header::HeaderValue::from_static("zh-CN,zh;q=0.9,en;q=0.8"));
+                headers.insert("Origin".parse::<reqwest::header::HeaderName>().unwrap(), reqwest::header::HeaderValue::from_str(&origin).unwrap());
+                headers
+            })
             .build()?;
 
         let progress_bar = ProgressBar::new(100);
@@ -79,7 +98,7 @@ impl M3u8Downloader {
 
         Ok(Self {
             client,
-            base_url,
+            base_url: base_url.clone(),
             download_dir,
             concurrent: args.concurrent,
             retry: args.retry,
@@ -89,6 +108,8 @@ impl M3u8Downloader {
             output_dir,
             index,
             progress_callback: None,
+
+            current_base_url: Arc::new(tokio::sync::Mutex::new(base_url)),
         })
     }
 
@@ -101,7 +122,45 @@ impl M3u8Downloader {
         info!("正在获取 M3U8 播放列表...");
 
         // 下载并解析 M3U8 文件
-        let m3u8_content = self.download_text(&self.base_url.to_string()).await?;
+        let mut m3u8_content = self.download_text(&self.base_url.to_string()).await?;
+
+        // 检查是否是主播放列表，如果是则选择最高带宽的流
+        if let Ok((_, master)) = m3u8_rs::parse_master_playlist(m3u8_content.as_bytes()) {
+            if !master.variants.is_empty() {
+                info!("检测到主播放列表，包含 {} 个流", master.variants.len());
+
+                // 显示所有可用流
+                for (i, variant) in master.variants.iter().enumerate() {
+                    info!(
+                        "  流 {}: {} (带宽: {}, 分辨率: {:?})",
+                        i + 1,
+                        variant.uri,
+                        variant.bandwidth,
+                        variant
+                            .resolution
+                            .map(|r| format!("{}x{}", r.width, r.height))
+                    );
+                }
+
+                // 选择最高带宽的流
+                let best_variant = master.variants.iter().max_by_key(|v| v.bandwidth).unwrap();
+
+                info!(
+                    "选择流: {} (带宽: {})",
+                    best_variant.uri, best_variant.bandwidth
+                );
+
+                // 下载子播放列表
+                let sub_url = resolve_url(&self.base_url, &best_variant.uri)?;
+                m3u8_content = self.download_text(&sub_url).await?;
+
+                // 更新当前base_url用于后续解析片段
+                let new_base_url = Url::parse(&sub_url)?;
+                let mut current_url = self.current_base_url.lock().await;
+                *current_url = new_base_url;
+            }
+        }
+
         let playlist = self.parse_m3u8(&m3u8_content)?;
 
         info!("发现 {} 个视频片段", playlist.segments.len());
@@ -114,8 +173,14 @@ impl M3u8Downloader {
 
         self.progress_bar.set_length(playlist.segments.len() as u64);
 
+        // 获取当前base_url用于解析
+        let current_url = {
+            let url = self.current_base_url.lock().await;
+            url.clone()
+        };
+
         // 检查加密 - 从播放列表内容中提取密钥信息
-        let key_data = extract_encryption_key(&m3u8_content, &self.client, &self.base_url).await?;
+        let key_data = extract_encryption_key(&m3u8_content, &self.client, &current_url).await?;
 
         if key_data.is_some() {
             info!("检测到加密流，已获取密钥");
@@ -272,7 +337,13 @@ impl M3u8Downloader {
             }
         }
 
-        let segment_url = resolve_url(&self.base_url, &segment.uri)?;
+        // 获取当前base_url
+        let current_url = {
+            let url = self.current_base_url.lock().await;
+            url.clone()
+        };
+
+        let segment_url = resolve_url(&current_url, &segment.uri)?;
         // info!("正在下载片段 {}: {}", index, segment_url);
         let response = self.client.get(segment_url).send().await?;
 
@@ -302,7 +373,7 @@ impl M3u8Downloader {
 
         Ok(())
     }
-    
+
     async fn merge_segments(&self, segments: &[m3u8_rs::MediaSegment]) -> Result<()> {
         let output_path = self
             .output_dir
@@ -340,6 +411,7 @@ impl M3u8Downloader {
             output_dir: self.output_dir.clone(),
             index: self.index,
             progress_callback: self.progress_callback.clone(),
+            current_base_url: self.current_base_url.clone(),
         }
     }
 }

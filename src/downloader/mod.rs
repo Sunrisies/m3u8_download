@@ -1,9 +1,9 @@
 mod encryption;
 mod segment;
 pub use encryption::{decrypt_segment, extract_encryption_key};
+use futures::{StreamExt, stream};
 pub use segment::merge_segments;
 
-use futures::stream::{self, StreamExt};
 use std::path::{Path, PathBuf};
 
 use clap::Parser;
@@ -139,7 +139,7 @@ pub async fn process_download_tasks(
     let mut failed_tasks = Vec::new();
     let mut successful_tasks = Vec::new();
     let mut skipped_tasks = Vec::new();
-    
+
     let download_dir = PathBuf::from("./output");
     if !download_dir.exists() {
         tokio::fs::create_dir_all(&download_dir)
