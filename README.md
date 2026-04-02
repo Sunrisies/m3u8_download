@@ -13,6 +13,8 @@ M3U8 Downloader 是一个专门用于下载 M3U8 格式视频流的工具。M3U8
 - **进度显示**：实时显示下载进度、速度和完成百分比
 - **日志记录**：详细的日志系统，支持彩色控制台输出和文件记录
 - **格式转换**：自动将 TS 片段合并并转换为 MP4 格式
+- **Web 服务模式**：提供 HTTP API 和 Web 界面，支持远程调用
+- **油猴脚本**：配套浏览器脚本，一键检测并下载网页中的 M3U8 视频
 
 ## 环境依赖
 
@@ -294,6 +296,90 @@ cargo run --release
 - 并发下载多个片段
 - 重试失败的片段
 
+## 油猴脚本（Tampermonkey）
+
+项目提供了一个配套的油猴脚本 `m3u8-downloader.user.js`，可以在浏览器中一键检测并下载网页中的 M3U8 视频。
+
+### 安装油猴脚本
+
+1. **安装 Tampermonkey 扩展**
+   - Chrome: [Tampermonkey](https://chrome.google.com/webstore/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo)
+   - Firefox: [Tampermonkey](https://addons.mozilla.org/firefox/addon/tampermonkey/)
+   - Edge: [Tampermonkey](https://microsoftedge.microsoft.com/addons/detail/tampermonkey/iikmkjmpaadaobahmlepeloendndfphd)
+
+2. **安装脚本**
+   - 打开 `m3u8-downloader.user.js` 文件
+   - Tampermonkey 会自动识别并提示安装
+   - 点击"安装"完成
+
+### 使用方法
+
+1. **启动下载服务**
+   ```bash
+   ./m3u8_downloader serve
+   ```
+
+2. **访问包含 M3U8 的网页**
+   - 脚本会自动运行 `@run-at document-start`
+   - 拦截 XHR、fetch、WebSocket 中的 M3U8 链接
+   - 监听 DOM 变化，扫描视频元素
+
+3. **点击浮动按钮**
+   - 页面右下角会出现 🎬 按钮
+   - 显示检测到的 M3U8 链接数量
+
+4. **选择链接并下载**
+   - 点击按钮打开链接列表
+   - 点击链接可自定义文件名
+   - 自动发送到后端下载
+
+### 油猴脚本功能
+
+| 功能 | 说明 |
+|------|------|
+| **自动检测** | 拦截 XHR/fetch/WebSocket，自动捕获 M3U8 链接 |
+| **DOM 扫描** | 监听 DOM 变化，扫描 video/audio/source 元素 |
+| **iframe 支持** | 跨 iframe 传递检测到的链接 |
+| **自定义文件名** | 下载前可自定义文件名（自动过滤非法字符） |
+| **进度弹窗** | 实时显示下载进度、状态 |
+| **最小化** | 进度弹窗可最小化为圆形按钮 |
+| **一键复制** | 支持复制所有检测到的链接 |
+| **防重复注入** | 避免多次注入导致重复监听 |
+
+### 油猴脚本 API 配置
+
+脚本默认连接 `http://localhost:8080`，如需修改请编辑脚本顶部：
+
+```javascript
+const BACKEND_URL = 'http://localhost:8080';
+```
+
+### 油猴脚本工作流程
+
+```
+网页加载
+    ↓
+注入拦截脚本（XHR/fetch/WebSocket/DOM）
+    ↓
+检测到 M3U8 链接
+    ↓
+显示浮动按钮（显示链接数量）
+    ↓
+用户点击按钮
+    ↓
+显示链接列表
+    ↓
+用户选择链接 → 输入文件名
+    ↓
+POST /api/download 创建任务
+    ↓
+WebSocket 监听进度
+    ↓
+显示下载进度弹窗
+    ↓
+下载完成通知
+```
+
 ## 项目结构分析
 
 ### 目录结构
@@ -303,6 +389,10 @@ m3u8_downloader/
 ├── src/
 │   ├── main.rs                    # 程序入口
 │   ├── error.rs                   # 错误类型定义
+│   ├── server/                    # Web 服务模块
+│   │   ├── mod.rs                 # 路由配置
+│   │   ├── handlers.rs            # API 处理函数
+│   │   └── state.rs               # 任务状态管理
 │   ├── downloader/
 │   │   ├── mod.rs                 # 下载器模块入口
 │   │   ├── segment.rs             # 视频片段合并逻辑
@@ -313,6 +403,11 @@ m3u8_downloader/
 │       ├── file.rs                # 文件操作工具
 │       ├── json_loader.rs         # JSON 配置加载
 │       └── download_segment.rs    # 核心下载逻辑
+├── static/
+│   └── index.html                 # Web 界面（打包进二进制）
+├── m3u8-downloader.user.js        # 油猴脚本
+├── data/                          # 数据持久化目录（运行时生成）
+│   └── tasks.json                 # 任务数据
 ├── examples/
 │   └── download_tasks.json        # 任务配置示例
 ├── logs/                          # 日志目录（运行时生成）
@@ -320,6 +415,8 @@ m3u8_downloader/
 ├── output/                        # 输出目录（运行时生成）
 ├── Cargo.toml                     # 项目配置
 ├── Cargo.lock                     # 依赖锁定
+├── USAGE.md                       # 使用说明
+├── OPTIMIZATION.md                # 优化说明
 └── .gitignore                     # Git 忽略文件
 ```
 

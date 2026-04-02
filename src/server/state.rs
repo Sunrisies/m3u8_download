@@ -11,6 +11,7 @@ use anyhow::Result;
 pub enum TaskStatus {
     Pending,
     Downloading,
+    Merging,
     Completed,
     Failed,
 }

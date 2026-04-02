@@ -31,6 +31,7 @@ pub async fn load_and_process_download_tasks(
 }
 
 pub type ProgressCallback = Arc<dyn Fn(f64) + Send + Sync>;
+pub type StatusCallback = Arc<dyn Fn(&str) + Send + Sync>;
 
 pub struct M3u8Downloader {
     pub client: Client,
@@ -44,6 +45,7 @@ pub struct M3u8Downloader {
     pub output_dir: PathBuf,
     pub index: usize,
     pub progress_callback: Option<ProgressCallback>,
+    pub status_callback: Option<StatusCallback>,
     pub current_base_url: Arc<tokio::sync::Mutex<Url>>,
 }
 
@@ -108,7 +110,7 @@ impl M3u8Downloader {
             output_dir,
             index,
             progress_callback: None,
-
+            status_callback: None,
             current_base_url: Arc::new(tokio::sync::Mutex::new(base_url)),
         })
     }
@@ -116,6 +118,17 @@ impl M3u8Downloader {
     pub fn with_progress_callback(mut self, callback: ProgressCallback) -> Self {
         self.progress_callback = Some(callback);
         self
+    }
+
+    pub fn with_status_callback(mut self, callback: StatusCallback) -> Self {
+        self.status_callback = Some(callback);
+        self
+    }
+
+    fn notify_status(&self, status: &str) {
+        if let Some(callback) = &self.status_callback {
+            callback(status);
+        }
     }
 
     pub async fn download(&self) -> Result<()> {
@@ -222,7 +235,9 @@ impl M3u8Downloader {
 
         // 合并文件
         info!("正在合并视频文件...");
+        self.notify_status("merging");
         self.merge_segments(&segments).await?;
+        self.notify_status("completed");
 
         info!(
             "下载完成！输出文件: {}/{}.ts",
@@ -411,6 +426,7 @@ impl M3u8Downloader {
             output_dir: self.output_dir.clone(),
             index: self.index,
             progress_callback: self.progress_callback.clone(),
+            status_callback: self.status_callback.clone(),
             current_base_url: self.current_base_url.clone(),
         }
     }

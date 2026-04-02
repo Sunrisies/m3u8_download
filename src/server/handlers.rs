@@ -114,10 +114,32 @@ async fn run_download_task(
             let _ = state.update_task_progress(&task_id, progress).await;
         });
     });
+
+    // 创建状态回调
+    let state_clone2 = state.clone();
+    let task_id_clone2 = task_id.clone();
+    let status_callback: crate::utils::download_segment::StatusCallback = Arc::new(move |status: &str| {
+        let state = state_clone2.clone();
+        let task_id = task_id_clone2.clone();
+        let status = status.to_string();
+        tokio::spawn(async move {
+            match status.as_str() {
+                "merging" => {
+                    let _ = state.update_task_status(&task_id, TaskStatus::Merging, None).await;
+                }
+                "completed" => {
+                    // 下载器内部合并完成，但这里不更新状态，由外层处理
+                }
+                _ => {}
+            }
+        });
+    });
     
     match crate::utils::download_segment::M3u8Downloader::new(args) {
         Ok(downloader) => {
-            let downloader = downloader.with_progress_callback(callback);
+            let downloader = downloader
+                .with_progress_callback(callback)
+                .with_status_callback(status_callback);
             match downloader.download().await {
                 Ok(_) => {
                     let _ = state.update_task_status(&task_id, TaskStatus::Completed, None).await;
