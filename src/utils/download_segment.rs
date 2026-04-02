@@ -135,43 +135,43 @@ impl M3u8Downloader {
         info!("正在获取 M3U8 播放列表...");
 
         // 下载并解析 M3U8 文件
-        let mut m3u8_content = self.download_text(&self.base_url.to_string()).await?;
+        let mut m3u8_content = self.download_text(self.base_url.as_ref()).await?;
 
         // 检查是否是主播放列表，如果是则选择最高带宽的流
-        if let Ok((_, master)) = m3u8_rs::parse_master_playlist(m3u8_content.as_bytes()) {
-            if !master.variants.is_empty() {
-                info!("检测到主播放列表，包含 {} 个流", master.variants.len());
+        if let Ok((_, master)) = m3u8_rs::parse_master_playlist(m3u8_content.as_bytes())
+            && !master.variants.is_empty()
+        {
+            info!("检测到主播放列表，包含 {} 个流", master.variants.len());
 
-                // 显示所有可用流
-                for (i, variant) in master.variants.iter().enumerate() {
-                    info!(
-                        "  流 {}: {} (带宽: {}, 分辨率: {:?})",
-                        i + 1,
-                        variant.uri,
-                        variant.bandwidth,
-                        variant
-                            .resolution
-                            .map(|r| format!("{}x{}", r.width, r.height))
-                    );
-                }
-
-                // 选择最高带宽的流
-                let best_variant = master.variants.iter().max_by_key(|v| v.bandwidth).unwrap();
-
+            // 显示所有可用流
+            for (i, variant) in master.variants.iter().enumerate() {
                 info!(
-                    "选择流: {} (带宽: {})",
-                    best_variant.uri, best_variant.bandwidth
+                    "  流 {}: {} (带宽: {}, 分辨率: {:?})",
+                    i + 1,
+                    variant.uri,
+                    variant.bandwidth,
+                    variant
+                        .resolution
+                        .map(|r| format!("{}x{}", r.width, r.height))
                 );
-
-                // 下载子播放列表
-                let sub_url = resolve_url(&self.base_url, &best_variant.uri)?;
-                m3u8_content = self.download_text(&sub_url).await?;
-
-                // 更新当前base_url用于后续解析片段
-                let new_base_url = Url::parse(&sub_url)?;
-                let mut current_url = self.current_base_url.lock().await;
-                *current_url = new_base_url;
             }
+
+            // 选择最高带宽的流
+            let best_variant = master.variants.iter().max_by_key(|v| v.bandwidth).unwrap();
+
+            info!(
+                "选择流: {} (带宽: {})",
+                best_variant.uri, best_variant.bandwidth
+            );
+
+            // 下载子播放列表
+            let sub_url = resolve_url(&self.base_url, &best_variant.uri)?;
+            m3u8_content = self.download_text(&sub_url).await?;
+
+            // 更新当前base_url用于后续解析片段
+            let new_base_url = Url::parse(&sub_url)?;
+            let mut current_url = self.current_base_url.lock().await;
+            *current_url = new_base_url;
         }
 
         let playlist = self.parse_m3u8(&m3u8_content)?;
@@ -226,8 +226,8 @@ impl M3u8Downloader {
         for (i, result) in results.into_iter().enumerate() {
             match result {
                 Ok(Ok(_)) => {}
-                Ok(Err(e)) => return Err(anyhow!("片段 {} 下载失败: {}", i, e)),
-                Err(e) => return Err(anyhow!("片段 {} 任务失败: {}", i, e)),
+                Ok(Err(e)) => return Err(anyhow!("片段 {i} 下载失败: {e}")),
+                Err(e) => return Err(anyhow!("片段 {i} 任务失败: {e}")),
             }
         }
 
@@ -327,7 +327,7 @@ impl M3u8Downloader {
         let segment_filename = Path::new(&segment.uri)
             .file_name()
             .and_then(|name| name.to_str())
-            .unwrap_or(&format!("segment_{:06}.ts", index))
+            .unwrap_or(&format!("segment_{index:06}.ts"))
             .to_string();
 
         // 检查分段文件是否已存在
@@ -409,7 +409,7 @@ impl M3u8Downloader {
     fn parse_m3u8(&self, content: &str) -> Result<MediaPlaylist> {
         match m3u8_rs::parse_media_playlist(content.as_bytes()) {
             Ok((_, playlist)) => Ok(playlist),
-            Err(e) => Err(anyhow!("M3U8 解析失败: {:?}", e)),
+            Err(e) => Err(anyhow!("M3U8 解析失败: {e:?}")),
         }
     }
 

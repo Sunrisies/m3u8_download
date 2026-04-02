@@ -20,7 +20,7 @@ pub fn decrypt_segment(data: Vec<u8>, key: &[u8], segment_index: usize) -> Resul
     let mut decrypted = data.clone();
     let decrypted_data = cipher
         .decrypt_padded_mut::<Pkcs7>(&mut decrypted)
-        .map_err(|e| anyhow!("解密失败: {:?}", e))?;
+        .map_err(|e| anyhow!("解密失败: {e:?}"))?;
 
     Ok(decrypted_data.to_vec())
 }
@@ -33,13 +33,13 @@ pub async fn extract_encryption_key(
 ) -> Result<Option<Vec<u8>>> {
     // 查找 EXT-X-KEY 标签
     for line in m3u8_content.lines() {
-        if line.starts_with("#EXT-X-KEY:") {
-            if let Some(uri_start) = line.find("URI=\"") {
-                let uri_start = uri_start + 5; // "URI=\"的长度
-                if let Some(uri_end) = line[uri_start..].find("\"") {
-                    let key_uri = &line[uri_start..uri_start + uri_end];
-                    return Ok(Some(download_key(client, base_url, key_uri).await?));
-                }
+        if line.starts_with("#EXT-X-KEY:")
+            && let Some(uri_start) = line.find("URI=\"")
+        {
+            let uri_start = uri_start + 5; // "URI=\"的长度
+            if let Some(uri_end) = line[uri_start..].find("\"") {
+                let key_uri = &line[uri_start..uri_start + uri_end];
+                return Ok(Some(download_key(client, base_url, key_uri).await?));
             }
         }
     }

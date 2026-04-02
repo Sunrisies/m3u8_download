@@ -30,7 +30,7 @@ pub fn resolve_url(base_url: &url::Url, url: &str) -> Result<String> {
         base_url
             .join(url)
             .map(|u| u.to_string())
-            .map_err(|e| anyhow!(format!("URL解析失败: {}", e)))
+            .map_err(|e| anyhow!(format!("URL解析失败: {e}")))
     }
 }
 
@@ -39,7 +39,7 @@ pub fn get_segment_filename(segment_uri: &str, index: usize) -> String {
     Path::new(segment_uri)
         .file_name()
         .and_then(|name| name.to_str())
-        .unwrap_or(&format!("segment_{:06}.ts", index))
+        .unwrap_or(&format!("segment_{index:06}.ts"))
         .to_string()
 }
 
@@ -53,7 +53,7 @@ pub fn is_already_downloaded(task: &DownloadTask, download_dir: &Path) -> bool {
     // 检查文件存在且非空
     if let Ok(metadata) = file_path.metadata() {
         let size = metadata.len();
-        info!("文件已存在，大小: {} bytes", size);
+        info!("文件已存在，大小: {size} bytes");
         size > 0
     } else {
         info!("文件不存在");

@@ -77,7 +77,7 @@ pub async fn process_download_task(
 ) -> Result<(), String> {
     // 确定输出目录
     let output_dir = if task.output_dir.is_empty() {
-        format!("./output")
+        "./output".to_string()
     } else {
         format!("{}/{}", task.output_dir, task.name)
     };
@@ -85,7 +85,7 @@ pub async fn process_download_task(
     if !Path::new(&output_dir).exists() {
         fs::create_dir_all(&output_dir)
             .await
-            .map_err(|e| format!("Failed to create output directory: {}", e))?;
+            .map_err(|e| format!("Failed to create output directory: {e}"))?;
     }
 
     // 确定下载目录（用于存储分段文件）
@@ -93,17 +93,17 @@ pub async fn process_download_task(
     if !Path::new(&download_dir).exists() {
         fs::create_dir_all(&download_dir)
             .await
-            .map_err(|e| format!("Failed to create download directory: {}", e))?;
+            .map_err(|e| format!("Failed to create download directory: {e}"))?;
     }
 
     let args = Args {
         url: task.url.clone(),
         output_name: task.name.clone(),
-        download_dir: download_dir,
+        download_dir,
         concurrent: max_concurrent,
         retry: 4,
-        output_dir: output_dir,
-        index: index,
+        output_dir,
+        index,
     };
     match M3u8Downloader::new(args) {
         Ok(downloader) => match downloader.download().await {
@@ -112,13 +112,13 @@ pub async fn process_download_task(
                 Ok(())
             }
             Err(e) => {
-                error!("❌ 下载失败: {}", e);
-                Err(format!("下载失败: {}", e))
+                error!("❌ 下载失败: {e}");
+                Err(format!("下载失败: {e}"))
             }
         },
         Err(e) => {
-            error!("❌ 创建下载器失败: {}", e);
-            Err(format!("创建下载器失败: {}", e))
+            error!("❌ 创建下载器失败: {e}");
+            Err(format!("创建下载器失败: {e}"))
         }
     }
 
@@ -144,7 +144,7 @@ pub async fn process_download_tasks(
     if !download_dir.exists() {
         tokio::fs::create_dir_all(&download_dir)
             .await
-            .map_err(|e| format!("Failed to create download directory: {}", e))?;
+            .map_err(|e| format!("Failed to create download directory: {e}"))?;
     }
 
     // 预先检查哪些任务需要跳过
@@ -194,11 +194,11 @@ pub async fn process_download_tasks(
         match result {
             Ok(_) => {
                 successful_tasks.push(name.clone());
-                info!("✅ 任务 {} 处理成功", name);
+                info!("✅ 任务 {name} 处理成功");
             }
             Err(e) => {
-                let error_info = format!("任务 '{}' 失败: {}", name, e);
-                error!("❌ {}", error_info);
+                let error_info = format!("任务 '{name}' 失败: {e}");
+                error!("❌ {error_info}");
                 failed_tasks.push((name, error_info));
             }
         }
@@ -215,21 +215,21 @@ pub async fn process_download_tasks(
     if !skipped_tasks.is_empty() {
         info!("\n===== 跳过任务列表 =====");
         for name in &skipped_tasks {
-            info!("⏭️ {} (文件已存在)", name);
+            info!("⏭️ {name} (文件已存在)");
         }
     }
 
     if !failed_tasks.is_empty() {
         info!("\n===== 失败任务列表 =====");
         for (name, error) in &failed_tasks {
-            info!("❌ {}: {}", name, error);
+            info!("❌ {name}: {error}");
         }
     }
 
     if !successful_tasks.is_empty() {
         info!("\n===== 成功任务列表 =====");
         for name in &successful_tasks {
-            info!("✅ {}", name);
+            info!("✅ {name}");
         }
     }
 

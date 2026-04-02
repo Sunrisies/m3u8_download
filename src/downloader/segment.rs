@@ -22,7 +22,7 @@ pub async fn merge_segments(
         let segment_path = download_dir.join(&segment_filename);
 
         if !segment_path.exists() {
-            return Err(anyhow!(format!("片段文件不存在: {:?}", segment_path)));
+            return Err(anyhow!(format!("片段文件不存在: {segment_path:?}")));
         }
 
         let mut segment_file = File::open(&segment_path)?;
@@ -48,11 +48,11 @@ pub async fn merge_segments(
             output_path.to_str().unwrap(),
         ])
         .output()
-        .map_err(|e| anyhow!(format!("执行FFmpeg失败: {}", e)))?;
+        .map_err(|e| anyhow!(format!("执行FFmpeg失败: {e}")))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow!(format!("FFmpeg转换失败: {}", stderr)));
+        return Err(anyhow!(format!("FFmpeg转换失败: {stderr}")));
     }
 
     // 清理临时文件

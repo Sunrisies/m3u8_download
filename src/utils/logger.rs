@@ -58,7 +58,7 @@ impl log4rs::encode::Encode for ColorEncoder {
             )),
         };
 
-        writeln!(buf, "{}", colored_message).map_err(anyhow::Error::new)
+        writeln!(buf, "{colored_message}").map_err(anyhow::Error::new)
     }
 }
 
