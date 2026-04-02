@@ -3,7 +3,6 @@ mod segment;
 pub use encryption::{decrypt_segment, extract_encryption_key};
 pub use segment::merge_segments;
 
-use futures::stream::{self, StreamExt};
 use std::path::{Path, PathBuf};
 
 use clap::Parser;
