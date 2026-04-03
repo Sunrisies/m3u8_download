@@ -26,12 +26,10 @@ pub struct SearchQuery {
 }
 
 pub async fn index() -> impl IntoResponse {
-    let html = StaticFiles::get("index.html")
-        .map(|file| file.data.to_vec())
-        .unwrap_or_else(|| {
-            b"<!DOCTYPE html><html><body><h1>M3U8 Downloader Service</h1></body></html>".to_vec()
-        });
-
+    let html = StaticFiles::get("index.html").map_or_else(
+        || b"<!DOCTYPE html><html><body><h1>M3U8 Downloader Service</h1></body></html>".to_vec(),
+        |file| file.data.to_vec(),
+    );
     Html(String::from_utf8_lossy(&html).to_string())
 }
 
@@ -136,16 +134,10 @@ async fn run_download_task(
             let task_id = task_id_clone2.clone();
             let status = status.to_string();
             tokio::spawn(async move {
-                match status.as_str() {
-                    "merging" => {
-                        let _ = state
-                            .update_task_status(&task_id, TaskStatus::Merging, None)
-                            .await;
-                    }
-                    "completed" => {
-                        // 下载器内部合并完成，但这里不更新状态，由外层处理
-                    }
-                    _ => {}
+                if status.as_str() == "merging" {
+                    let _ = state
+                        .update_task_status(&task_id, TaskStatus::Merging, None)
+                        .await;
                 }
             });
         });
@@ -156,7 +148,7 @@ async fn run_download_task(
                 .with_progress_callback(callback)
                 .with_status_callback(status_callback);
             match downloader.download().await {
-                Ok(_) => {
+                Ok(()) => {
                     let _ = state
                         .update_task_status(&task_id, TaskStatus::Completed, None)
                         .await;
@@ -196,10 +188,10 @@ pub async fn get_all_tasks(
     Query(query): Query<SearchQuery>,
 ) -> impl IntoResponse {
     let tasks = if let Some(q) = query.q {
-        if !q.is_empty() {
-            state.search_tasks(&q).await
+        if q.is_empty() {
+            state.get_all_tasks().await // 条件为真时执行（q 为空）
         } else {
-            state.get_all_tasks().await
+            state.search_tasks(&q).await // 条件为假时执行（q 非空）
         }
     } else {
         state.get_all_tasks().await
@@ -208,15 +200,17 @@ pub async fn get_all_tasks(
 }
 
 pub async fn get_task(Path(id): Path<String>, State(state): State<AppState>) -> impl IntoResponse {
-    match state.get_task(&id).await {
-        Some(task) => (StatusCode::OK, Json(json!(task))),
-        None => (
-            StatusCode::NOT_FOUND,
-            Json(json!({
-                "error": "任务不存在"
-            })),
-        ),
-    }
+    state.get_task(&id).await.map_or_else(
+        || {
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({
+                    "error": "任务不存在"
+                })),
+            )
+        },
+        |task| (StatusCode::OK, Json(json!(task))),
+    )
 }
 
 pub async fn delete_task(

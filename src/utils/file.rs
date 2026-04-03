@@ -48,12 +48,14 @@ pub fn is_already_downloaded(task: &DownloadTask, download_dir: &Path) -> bool {
     let file_path = download_dir.join(file_name);
     // 简单检查：文件存在且非空
     // 检查文件存在且非空
-    if let Ok(metadata) = file_path.metadata() {
-        let size = metadata.len();
-        info!("文件已存在，大小: {size} bytes");
-        size > 0
-    } else {
-        info!("文件不存在");
-        false
-    }
+    file_path.metadata().map_or_else(
+        |_| {
+            info!("文件不存在");
+            false
+        },
+        |metadata| {
+            info!("文件大小: {}", metadata.len());
+            metadata.len() > 0
+        },
+    )
 }

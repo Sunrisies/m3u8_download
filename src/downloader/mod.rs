@@ -50,7 +50,7 @@ impl DownloadStats {
             start_time: Instant::now(),
         }
     }
-
+    #[allow(clippy::cast_precision_loss)]
     pub fn get_speed(&self) -> f64 {
         let elapsed = self.start_time.elapsed().as_secs_f64();
         if elapsed > 0.0 {
@@ -59,7 +59,7 @@ impl DownloadStats {
             0.0
         }
     }
-
+    #[allow(clippy::cast_precision_loss)]
     pub fn get_progress_percentage(&self) -> f64 {
         if self.total_segments > 0 {
             (self.completed_segments as f64 / self.total_segments as f64) * 100.0
@@ -107,7 +107,7 @@ pub async fn process_download_task(
     };
     match M3u8Downloader::new(args) {
         Ok(downloader) => match downloader.download().await {
-            Ok(_) => {
+            Ok(()) => {
                 info!("✅ 下载成功完成！");
                 Ok(())
             }
@@ -192,7 +192,7 @@ pub async fn process_download_tasks(
     // 收集结果
     while let Some((_i, name, result)) = stream.next().await {
         match result {
-            Ok(_) => {
+            Ok(()) => {
                 successful_tasks.push(name.clone());
                 info!("✅ 任务 {name} 处理成功");
             }

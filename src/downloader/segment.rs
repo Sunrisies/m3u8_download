@@ -1,13 +1,15 @@
 use crate::utils::get_segment_filename;
 use anyhow::{Result, anyhow};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+// 使用FFmpeg将TS转换为MP4
+use std::process::Command;
 use tokio::fs;
 
 /// 合并所有视频片段
 pub async fn merge_segments(
     download_dir: &Path,
     segments: &[m3u8_rs::MediaSegment],
-    output_path: &PathBuf,
+    output_path: &Path,
 ) -> Result<()> {
     use std::fs::File;
     use std::io::{BufWriter, Read, Write};
@@ -22,7 +24,10 @@ pub async fn merge_segments(
         let segment_path = download_dir.join(&segment_filename);
 
         if !segment_path.exists() {
-            return Err(anyhow!(format!("片段文件不存在: {segment_path:?}")));
+            return Err(anyhow!(format!(
+                "片段文件不存在: {}",
+                segment_path.display()
+            )));
         }
 
         let mut segment_file = File::open(&segment_path)?;
@@ -32,9 +37,6 @@ pub async fn merge_segments(
     }
 
     writer.flush()?;
-
-    // 使用FFmpeg将TS转换为MP4
-    use std::process::Command;
 
     let output = Command::new("ffmpeg")
         .args([

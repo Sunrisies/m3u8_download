@@ -174,7 +174,7 @@ impl M3u8Downloader {
             *current_url = new_base_url;
         }
 
-        let playlist = self.parse_m3u8(&m3u8_content)?;
+        let playlist = Self::parse_m3u8(&m3u8_content)?;
 
         info!("发现 {} 个视频片段", playlist.segments.len());
 
@@ -225,7 +225,7 @@ impl M3u8Downloader {
         // 检查是否有下载失败
         for (i, result) in results.into_iter().enumerate() {
             match result {
-                Ok(Ok(_)) => {}
+                Ok(Ok(())) => {}
                 Ok(Err(e)) => return Err(anyhow!("片段 {i} 下载失败: {e}")),
                 Err(e) => return Err(anyhow!("片段 {i} 任务失败: {e}")),
             }
@@ -268,27 +268,33 @@ impl M3u8Downloader {
 
         loop {
             match self.try_download_segment(index, segment, key).await {
-                Ok(_) => {
+                Ok(()) => {
                     // 更新统计信息
                     {
-                        let mut stats = self.stats.lock().await;
-                        stats.completed_segments += 1;
-
-                        let speed = stats.get_speed();
-                        let percentage = stats.get_progress_percentage();
-                        self.progress_bar
-                            .set_position(stats.completed_segments as u64);
+                        // 1. 在锁内更新计数器并读取所需数据
+                        let (completed, total, speed, percentage) = {
+                            let mut stats = self.stats.lock().await;
+                            stats.completed_segments += 1;
+                            let completed = stats.completed_segments;
+                            let total = stats.total_segments;
+                            let speed = stats.get_speed();
+                            let percentage = stats.get_progress_percentage();
+                            drop(stats); // 显式提前释放
+                            (completed, total, speed, percentage)
+                        }; // 锁在这里释放
+                        // 2. 更新进度条（不持有锁）
+                        self.progress_bar.set_position(completed as u64);
                         self.progress_bar.set_message(format!(
                             "这个是第{}个任务,名称是:{} 已下载: {}/{} ({:.1}%) 速度: {:.1} KB/s",
                             self.index,
                             self.output_filename,
-                            stats.completed_segments,
-                            stats.total_segments,
+                            completed,
+                            total,
                             percentage,
                             speed / 1024.0
                         ));
 
-                        // 调用进度回调
+                        // 3. 调用进度回调
                         if let Some(callback) = &self.progress_callback {
                             callback(percentage);
                         }
@@ -299,19 +305,19 @@ impl M3u8Downloader {
                     retry_count += 1;
                     if retry_count > self.retry {
                         return Err(anyhow!(
-                            "片段 {} 下载失败，已重试 {} 次: {}",
-                            index,
-                            self.retry,
-                            e
+                            "片段 {index} 下载失败，已重试 {} 次: {e}",
+                            self.retry
                         ));
                     }
                     error!(
-                        "片段 {} 下载失败，正在重试 ({}/{})...",
-                        index, retry_count, self.retry
+                        "片段 {index} 下载失败，正在重试 ({retry_count}/{})...",
+                        self.retry
                     );
                     // 指数退避：1s, 2s, 4s, 8s...
                     let delay_ms = 1000 * (1 << (retry_count - 1));
-                    sleep(Duration::from_millis(delay_ms as u64)).await;
+                    let delay_u64 =
+                        u64::try_from(delay_ms).expect("delay_ms should be non-negative");
+                    sleep(Duration::from_millis(delay_u64)).await;
                 }
             }
         }
@@ -335,19 +341,13 @@ impl M3u8Downloader {
         if segment_path.exists() {
             // 校验已存在的文件是否有效
             if is_valid_ts_file(&segment_path) {
-                info!(
-                    "片段 {} ({}) 已存在且校验通过，跳过下载",
-                    index, segment_filename
-                );
+                info!("片段 {index} ({segment_filename}) 已存在且校验通过，跳过下载");
                 return Ok(());
             }
-            error!(
-                "片段 {} ({}) 已存在但校验失败，将重新下载",
-                index, segment_filename
-            );
+            error!("片段 {index} ({segment_filename}) 已存在但校验失败，将重新下载");
             // 删除损坏的文件
             if let Err(e) = fs::remove_file(&segment_path) {
-                error!("删除损坏文件失败 {}: {}", segment_path.display(), e);
+                error!("删除损坏文件失败 {}: {e}", segment_path.display());
             }
         }
 
@@ -405,7 +405,7 @@ impl M3u8Downloader {
         Ok(())
     }
 
-    fn parse_m3u8(&self, content: &str) -> Result<MediaPlaylist> {
+    fn parse_m3u8(content: &str) -> Result<MediaPlaylist> {
         match m3u8_rs::parse_media_playlist(content.as_bytes()) {
             Ok((_, playlist)) => Ok(playlist),
             Err(e) => Err(anyhow!("M3U8 解析失败: {e:?}")),
