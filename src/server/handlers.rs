@@ -1,20 +1,33 @@
 use axum::{
     Json,
     extract::{
-        Path, Query, State, WebSocketUpgrade,
+        Path as AxumPath, Query, State, WebSocketUpgrade,
         ws::{Message, WebSocket},
     },
     http::StatusCode,
     response::{Html, IntoResponse, Response},
 };
 use rust_embed::RustEmbed;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::interval;
 
-use crate::server::state::{AppState, DownloadRequest, TaskStatus};
+use crate::server::state::{AppSettings, AppState, DownloadRequest, TaskStatus};
+
+#[derive(Serialize)]
+pub struct DirEntry {
+    pub name: String,
+    pub path: String,
+    pub is_dir: bool,
+}
+
+#[derive(Deserialize)]
+pub struct BrowseQuery {
+    pub path: Option<String>,
+}
 
 #[derive(RustEmbed)]
 #[folder = "static/"]
@@ -33,7 +46,15 @@ pub async fn index() -> impl IntoResponse {
     Html(String::from_utf8_lossy(&html).to_string())
 }
 
-pub async fn static_handler(Path(path): Path<String>) -> impl IntoResponse {
+pub async fn settings_page() -> impl IntoResponse {
+    let html = StaticFiles::get("settings.html").map_or_else(
+        || b"<!DOCTYPE html><html><body><h1>Settings</h1></body></html>".to_vec(),
+        |file| file.data.to_vec(),
+    );
+    Html(String::from_utf8_lossy(&html).to_string())
+}
+
+pub async fn static_handler(AxumPath(path): AxumPath<String>) -> impl IntoResponse {
     let mime = mime_guess::from_path(&path).first_or_octet_stream();
 
     if let Some(file) = StaticFiles::get(&path) {
@@ -91,10 +112,13 @@ async fn run_download_task(
         .update_task_status(&task_id, TaskStatus::Downloading, None)
         .await;
 
-    let output_dir = request.output_dir.unwrap_or_else(|| "./output".to_string());
-    let download_dir = format!("./downloads/{}", request.name);
+    let settings = state.get_settings().await;
+    log::info!("📋 任务使用设置 - 下载目录: {}, 临时目录: {}, 并发: {}, 重试: {}", 
+        settings.download_dir, settings.temp_dir, settings.concurrent, settings.retry);
+    
+    let output_dir = request.output_dir.unwrap_or_else(|| settings.download_dir.clone());
+    let download_dir = format!("{}/{}", settings.temp_dir, request.name);
 
-    // 创建目录
     tokio::fs::create_dir_all(&output_dir)
         .await
         .map_err(|e| e.to_string())?;
@@ -102,12 +126,14 @@ async fn run_download_task(
         .await
         .map_err(|e| e.to_string())?;
 
+    log::info!("📁 输出目录: {}, 临时目录: {}", output_dir, download_dir);
+
     let output_name = request.name.clone();
     let args = crate::downloader::Args {
         url: request.url,
         output_name: request.name,
-        concurrent: state.max_concurrent,
-        retry: 4,
+        concurrent: settings.concurrent,
+        retry: settings.retry,
         download_dir,
         output_dir: output_dir.clone(),
         index: 1,
@@ -199,7 +225,7 @@ pub async fn get_all_tasks(
     Json(tasks)
 }
 
-pub async fn get_task(Path(id): Path<String>, State(state): State<AppState>) -> impl IntoResponse {
+pub async fn get_task(AxumPath(id): AxumPath<String>, State(state): State<AppState>) -> impl IntoResponse {
     state.get_task(&id).await.map_or_else(
         || {
             (
@@ -214,7 +240,7 @@ pub async fn get_task(Path(id): Path<String>, State(state): State<AppState>) -> 
 }
 
 pub async fn delete_task(
-    Path(id): Path<String>,
+    AxumPath(id): AxumPath<String>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
     match state.delete_task(&id).await {
@@ -249,7 +275,7 @@ pub async fn get_stats(State(app_state): State<AppState>) -> impl IntoResponse {
 
 pub async fn websocket_handler(
     ws: WebSocketUpgrade,
-    Path(id): Path<String>,
+    AxumPath(id): AxumPath<String>,
     State(state): State<AppState>,
 ) -> Response {
     ws.on_upgrade(move |socket| handle_websocket(socket, id, state))
@@ -267,7 +293,6 @@ async fn handle_websocket(mut socket: WebSocket, task_id: String, state: AppStat
                         break;
                     }
 
-                    // 如果任务完成或失败，关闭连接
                     if task.status == TaskStatus::Completed || task.status == TaskStatus::Failed {
                         break;
                     }
@@ -282,4 +307,154 @@ async fn handle_websocket(mut socket: WebSocket, task_id: String, state: AppStat
             }
         }
     }
+}
+
+pub async fn get_settings(State(state): State<AppState>) -> impl IntoResponse {
+    let settings = state.get_settings().await;
+    log::info!("🔧 获取设置: download_dir={}, concurrent={}", settings.download_dir, settings.concurrent);
+    Json(settings)
+}
+
+pub async fn update_settings(
+    State(state): State<AppState>,
+    Json(new_settings): Json<AppSettings>,
+) -> impl IntoResponse {
+    log::info!("🔧 收到设置更新请求: download_dir={}, concurrent={}, retry={}", 
+        new_settings.download_dir, new_settings.concurrent, new_settings.retry);
+    
+    match state.update_settings(new_settings.clone()).await {
+        Ok(()) => {
+            let saved = state.get_settings().await;
+            log::info!("✅ 设置更新成功: download_dir={}, concurrent={}", saved.download_dir, saved.concurrent);
+            (StatusCode::OK, Json(json!({"message": "设置已保存"})))
+        }
+        Err(e) => {
+            log::error!("❌ 设置更新失败: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": format!("保存失败: {}", e)})),
+            )
+        }
+    }
+}
+
+pub async fn browse_directories(
+    Query(query): Query<BrowseQuery>,
+) -> impl IntoResponse {
+    let current_path = query.path.clone().unwrap_or_else(|| ".".to_string());
+    let path = Path::new(&current_path);
+    
+    let mut entries = Vec::new();
+    
+    if path.is_relative() {
+        if let Ok(absolute) = std::env::current_dir() {
+            let full_path = absolute.join(path);
+            let full_path = full_path.as_path();
+            
+            if let Ok(read_dir) = std::fs::read_dir(full_path) {
+                let mut dirs: Vec<DirEntry> = Vec::new();
+                let mut files: Vec<DirEntry> = Vec::new();
+                
+                for entry in read_dir.flatten() {
+                    let entry_path = entry.path();
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    
+                    if name.starts_with('.') {
+                        continue;
+                    }
+                    
+                    let is_dir = entry_path.is_dir();
+                    let full_path_str = entry_path.to_string_lossy().to_string();
+                    
+                    let dir_entry = DirEntry {
+                        name,
+                        path: full_path_str,
+                        is_dir,
+                    };
+                    
+                    if is_dir {
+                        dirs.push(dir_entry);
+                    } else {
+                        files.push(dir_entry);
+                    }
+                }
+                
+                dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+                files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+                
+                entries.extend(dirs);
+                entries.extend(files);
+            }
+        }
+    } else if path.is_absolute() && path.exists() && path.is_dir() {
+        if let Ok(read_dir) = std::fs::read_dir(path) {
+            let mut dirs: Vec<DirEntry> = Vec::new();
+            let mut files: Vec<DirEntry> = Vec::new();
+            
+            for entry in read_dir.flatten() {
+                let entry_path = entry.path();
+                let name = entry.file_name().to_string_lossy().to_string();
+                
+                if name.starts_with('.') {
+                    continue;
+                }
+                
+                let is_dir = entry_path.is_dir();
+                let full_path_str = entry_path.to_string_lossy().to_string();
+                
+                let dir_entry = DirEntry {
+                    name,
+                    path: full_path_str,
+                    is_dir,
+                };
+                
+                if is_dir {
+                    dirs.push(dir_entry);
+                } else {
+                    files.push(dir_entry);
+                }
+            }
+            
+            dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+            files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+            
+            entries.extend(dirs);
+            entries.extend(files);
+        }
+    }
+    
+    let parent_path = if path.is_relative() {
+        if let Ok(absolute) = std::env::current_dir() {
+            let full_path = absolute.join(path);
+            if let Some(parent) = full_path.parent() {
+                parent.to_string_lossy().to_string()
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        }
+    } else if path.is_absolute() {
+        path.parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+    
+    let current_path_str = if path.is_relative() {
+        if let Ok(absolute) = std::env::current_dir() {
+            absolute.join(path).to_string_lossy().to_string()
+        } else {
+            current_path.clone()
+        }
+    } else {
+        current_path.clone()
+    };
+    
+    Json(json!({
+        "current_path": current_path_str,
+        "parent_path": parent_path,
+        "entries": entries
+    }))
 }

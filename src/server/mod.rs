@@ -3,7 +3,7 @@ pub mod state;
 
 use axum::{
     Router,
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
 };
 use std::path::PathBuf;
 use tower_http::cors::CorsLayer;
@@ -12,10 +12,9 @@ use state::AppState;
 
 pub fn create_router(state: AppState) -> Router {
     Router::new()
-        // 静态文件
         .route("/", get(handlers::index))
         .route("/static/*path", get(handlers::static_handler))
-        // API 路由
+        .route("/settings.html", get(handlers::settings_page))
         .route("/api/download", post(handlers::start_download))
         .route("/api/tasks", get(handlers::get_all_tasks))
         .route("/api/tasks/stats", get(handlers::get_stats))
@@ -25,18 +24,20 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/tasks/:id", get(handlers::get_task))
         .route("/api/tasks/:id", delete(handlers::delete_task))
         .route("/api/tasks/:id/ws", get(handlers::websocket_handler))
-        // 中间件
+        .route("/api/settings", get(handlers::get_settings))
+        .route("/api/settings", put(handlers::update_settings))
+        .route("/api/browse", get(handlers::browse_directories))
         .layer(CorsLayer::permissive())
         .with_state(state)
 }
 
-pub async fn start_server(host: &str, port: u16, max_concurrent: usize) -> anyhow::Result<()> {
+pub async fn start_server(host: &str, port: u16) -> anyhow::Result<()> {
     let data_file = PathBuf::from("./data/tasks.json");
-    let state = AppState::new(max_concurrent, data_file);
+    let settings_file = PathBuf::from("./data/settings.json");
+    let state = AppState::new(data_file, settings_file);
 
-    // 加载历史数据
     if let Err(e) = state.load().await {
-        log::warn!("加载历史数据失败: {e}");
+        log::warn!("加载数据失败: {e}");
     }
 
     let app = create_router(state);

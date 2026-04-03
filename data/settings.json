@@ -1,0 +1,8 @@
+{
+  "download_dir": "D:/project/project\\html",
+  "temp_dir": "models",
+  "concurrent": 8,
+  "retry": 4,
+  "ffmpeg_path": "",
+  "timeout": 30
+}

@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>设置 - M3U8 Downloader</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: { 50: '#f0f9ff', 100: '#e0f2fe', 200: '#bae6fd', 300: '#7dd3fc', 400: '#38bdf8', 500: '#0ea5e9', 600: '#0284c7', 700: '#0369a1', 800: '#075985', 900: '#0c4a6e' }
+                    }
+                }
+            }
+        }
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * { font-family: 'Inter', system-ui, sans-serif; }
+        .sidebar-link.active { background: rgba(14, 165, 233, 0.1); color: #0284c7; border-right: 3px solid #0284c7; }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #f1f5f9; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        html, body { overflow: hidden; height: 100%; }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-900 h-screen overflow-hidden">
+    <div class="flex h-full">
+        <!-- Sidebar -->
+        <aside class="w-64 bg-white border-r border-gray-200 flex flex-col">
+            <div class="h-16 flex items-center px-6 border-b border-gray-100">
+                <div class="flex items-center gap-3">
+                    <div class="w-8 h-8 bg-gradient-to-br from-primary-400 to-primary-600 rounded-lg flex items-center justify-center">
+                        <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+                        </svg>
+                    </div>
+                    <span class="font-semibold text-lg text-gray-800">M3U8 DL</span>
+                </div>
+            </div>
+            
+            <nav class="flex-1 py-4 overflow-y-auto">
+                <div class="px-4 mb-2 text-xs font-semibold text-gray-400 uppercase tracking-wider">菜单</div>
+                <a href="/" class="sidebar-link flex items-center gap-3 px-6 py-3 text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z"></path>
+                    </svg>
+                    <span>仪表盘</span>
+                </a>
+                <a href="/" class="sidebar-link flex items-center gap-3 px-6 py-3 text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16"></path>
+                    </svg>
+                    <span>任务列表</span>
+                </a>
+                <a href="/" class="sidebar-link flex items-center gap-3 px-6 py-3 text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+                    </svg>
+                    <span>新建任务</span>
+                </a>
+                <a href="/settings.html" class="sidebar-link active flex items-center gap-3 px-6 py-3 text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                    </svg>
+                    <span>设置</span>
+                </a>
+                
+                <div class="px-4 mt-6 mb-2 text-xs font-semibold text-gray-400 uppercase tracking-wider">筛选</div>
+                <a href="/" class="sidebar-link flex items-center gap-3 px-6 py-3 text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors">
+                    <span class="w-2 h-2 rounded-full bg-gray-400"></span>
+                    <span>全部任务</span>
+                </a>
+                <a href="/" class="sidebar-link flex items-center gap-3 px-6 py-3 text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors">
+                    <span class="w-2 h-2 rounded-full bg-blue-500"></span>
+                    <span>下载中</span>
+                </a>
+                <a href="/" class="sidebar-link flex items-center gap-3 px-6 py-3 text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors">
+                    <span class="w-2 h-2 rounded-full bg-green-500"></span>
+                    <span>已完成</span>
+                </a>
+                <a href="/" class="sidebar-link flex items-center gap-3 px-6 py-3 text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors">
+                    <span class="w-2 h-2 rounded-full bg-red-500"></span>
+                    <span>失败</span>
+                </a>
+            </nav>
+            
+            <div class="p-4 border-t border-gray-100">
+                <div class="text-xs text-gray-400 text-center">v1.0.0</div>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="flex-1 flex flex-col overflow-hidden">
+            <header class="h-16 bg-white border-b border-gray-200 flex items-center px-6">
+                <h1 class="text-lg font-semibold text-gray-800">系统设置</h1>
+            </header>
+
+            <div class="flex-1 overflow-y-auto p-6">
+                <form id="settingsForm" class="max-w-4xl">
+                    <!-- Top Row -->
+                    <div class="grid grid-cols-2 gap-6 mb-6">
+                        <!-- Download Settings -->
+                        <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+                            <div class="px-6 py-4 border-b border-gray-100">
+                                <h2 class="font-semibold text-gray-800">下载设置</h2>
+                            </div>
+                            <div class="p-6 space-y-4">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-2">下载目录</label>
+                                    <div class="flex gap-2">
+                                        <div class="flex-1 relative">
+                                            <input type="text" name="download_dir" id="download_dir" readonly
+                                                placeholder="点击选择目录"
+                                                class="w-full bg-gray-50 border border-gray-200 rounded-lg px-4 py-2.5 pr-10 text-sm cursor-pointer focus:outline-none focus:border-primary-500 placeholder-gray-400"
+                                                onclick="openDirPicker('download_dir')">
+                                            <svg class="w-4 h-4 absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path>
+                                            </svg>
+                                        </div>
+                                        <button type="button" onclick="openDirPicker('download_dir')"
+                                            class="px-4 py-2.5 bg-gray-100 hover:bg-gray-200 border border-gray-200 rounded-lg text-sm font-medium text-gray-700 transition-colors whitespace-nowrap">
+                                            选择
+                                        </button>
+                                    </div>
+                                    <p class="text-xs text-gray-400 mt-1">最终合并视频存放的目录</p>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-2">临时目录</label>
+                                    <div class="flex gap-2">
+                                        <div class="flex-1 relative">
+                                            <input type="text" name="temp_dir" id="temp_dir" readonly
+                                                placeholder="点击选择目录"
+                                                class="w-full bg-gray-50 border border-gray-200 rounded-lg px-4 py-2.5 pr-10 text-sm cursor-pointer focus:outline-none focus:border-primary-500 placeholder-gray-400"
+                                                onclick="openDirPicker('temp_dir')">
+                                            <svg class="w-4 h-4 absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path>
+                                            </svg>
+                                        </div>
+                                        <button type="button" onclick="openDirPicker('temp_dir')"
+                                            class="px-4 py-2.5 bg-gray-100 hover:bg-gray-200 border border-gray-200 rounded-lg text-sm font-medium text-gray-700 transition-colors whitespace-nowrap">
+                                            选择
+                                        </button>
+                                    </div>
+                                    <p class="text-xs text-gray-400 mt-1">分片临时存放，下载完成后自动清理</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Performance Settings -->
+                        <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+                            <div class="px-6 py-4 border-b border-gray-100">
+                                <h2 class="font-semibold text-gray-800">性能设置</h2>
+                            </div>
+                            <div class="p-6 space-y-4">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-2">并发数: <span id="concurrentValue" class="text-primary-600 font-semibold">8</span></label>
+                                    <input type="range" name="concurrent" id="concurrent" min="1" max="32" value="8"
+                                        class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-primary-600"
+                                        oninput="document.getElementById('concurrentValue').textContent = this.value">
+                                    <p class="text-xs text-gray-400 mt-1">同时下载的分片数量 (1-32)</p>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-2">重试次数: <span id="retryValue" class="text-primary-600 font-semibold">4</span></label>
+                                    <input type="range" name="retry" id="retry" min="0" max="10" value="4"
+                                        class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-primary-600"
+                                        oninput="document.getElementById('retryValue').textContent = this.value">
+                                    <p class="text-xs text-gray-400 mt-1">下载失败时的自动重试次数</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Bottom Row -->
+                    <div class="grid grid-cols-2 gap-6 mb-6">
+                        <!-- Advanced Settings -->
+                        <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+                            <div class="px-6 py-4 border-b border-gray-100">
+                                <h2 class="font-semibold text-gray-800">高级设置</h2>
+                            </div>
+                            <div class="p-6 space-y-4">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-2">FFmpeg 路径</label>
+                                    <input type="text" name="ffmpeg_path" id="ffmpeg_path" placeholder="留空使用系统 PATH"
+                                        class="w-full bg-gray-50 border border-gray-200 rounded-lg px-4 py-2.5 focus:outline-none focus:border-primary-500 focus:bg-white placeholder-gray-400 text-sm">
+                                    <p class="text-xs text-gray-400 mt-1">指定 FFmpeg 路径</p>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-2">超时时间 (秒)</label>
+                                    <input type="number" name="timeout" id="timeout" min="5" max="300" value="30"
+                                        class="w-full bg-gray-50 border border-gray-200 rounded-lg px-4 py-2.5 focus:outline-none focus:border-primary-500 focus:bg-white placeholder-gray-400 text-sm">
+                                    <p class="text-xs text-gray-400 mt-1">单个分片下载的超时时间</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Actions -->
+                        <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+                            <div class="px-6 py-4 border-b border-gray-100">
+                                <h2 class="font-semibold text-gray-800">操作</h2>
+                            </div>
+                            <div class="p-6 flex flex-col justify-center h-[calc(100%-57px)]">
+                                <div class="space-y-3">
+                                    <button type="button" onclick="resetSettings()" 
+                                        class="w-full px-6 py-3 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors text-gray-700 font-medium">
+                                        重置为默认
+                                    </button>
+                                    <button type="submit" 
+                                        class="w-full px-6 py-3 bg-primary-600 hover:bg-primary-700 rounded-lg font-medium transition-colors text-white">
+                                        保存设置
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </main>
+    </div>
+
+    <!-- Directory Picker Modal -->
+    <div id="dirPickerModal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50 hidden">
+        <div class="bg-white rounded-xl shadow-2xl w-[600px] max-h-[80vh] flex flex-col">
+            <div class="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+                <h3 class="font-semibold text-gray-800">选择目录</h3>
+                <button onclick="closeDirPicker()" class="text-gray-400 hover:text-gray-600">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                    </svg>
+                </button>
+            </div>
+            <div class="px-6 py-3 bg-gray-50 border-b border-gray-200">
+                <div class="flex items-center gap-2 text-sm text-gray-600">
+                    <span>当前路径:</span>
+                    <span id="currentPathDisplay" class="font-mono bg-gray-100 px-2 py-1 rounded truncate flex-1"></span>
+                </div>
+            </div>
+            <div id="dirList" class="flex-1 overflow-y-auto p-2 max-h-[400px]">
+                <div class="flex items-center justify-center py-8 text-gray-400">
+                    <svg class="animate-spin h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    加载中...
+                </div>
+            </div>
+            <div class="px-6 py-4 border-t border-gray-200 flex gap-3">
+                <button onclick="goToParent()" id="btnParent" class="px-4 py-2 border border-gray-200 rounded-lg hover:bg-gray-50 text-sm disabled:opacity-50 disabled:cursor-not-allowed">
+                    返回上级
+                </button>
+                <div class="flex-1"></div>
+                <button onclick="closeDirPicker()" class="px-4 py-2 border border-gray-200 rounded-lg hover:bg-gray-50 text-sm">
+                    取消
+                </button>
+                <button onclick="confirmSelection()" id="btnSelect" class="px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 text-sm">
+                    选择此目录
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast -->
+    <div id="toast" class="fixed bottom-6 right-6 px-6 py-3 rounded-lg text-white text-sm font-medium shadow-xl transform translate-y-20 opacity-0 transition-all duration-300 z-50"></div>
+
+    <script>
+        const DEFAULT_SETTINGS = {
+            download_dir: './output',
+            temp_dir: './temp',
+            concurrent: 8,
+            retry: 4,
+            ffmpeg_path: '',
+            timeout: 30
+        };
+
+        let currentPickerTarget = null;
+        let currentBrowsePath = null;
+
+        function showToast(msg, type = 'success') {
+            const toast = document.getElementById('toast');
+            toast.textContent = msg;
+            toast.className = `fixed bottom-6 right-6 px-6 py-3 rounded-lg text-white text-sm font-medium shadow-xl transition-all duration-300 z-50 ${type === 'success' ? 'bg-green-600' : 'bg-red-600'}`;
+            toast.style.transform = 'translateY(0)';
+            toast.style.opacity = '1';
+            setTimeout(() => {
+                toast.style.transform = 'translateY(20px)';
+                toast.style.opacity = '0';
+            }, 3000);
+        }
+
+        async function openDirPicker(targetId) {
+            currentPickerTarget = targetId;
+            document.getElementById('dirPickerModal').classList.remove('hidden');
+            await browseDirectory(null);
+        }
+
+        function closeDirPicker() {
+            document.getElementById('dirPickerModal').classList.add('hidden');
+            currentPickerTarget = null;
+        }
+
+        async function browseDirectory(path) {
+            const dirList = document.getElementById('dirList');
+            const currentPathDisplay = document.getElementById('currentPathDisplay');
+            const btnParent = document.getElementById('btnParent');
+            
+            dirList.innerHTML = `
+                <div class="flex items-center justify-center py-8 text-gray-400">
+                    <svg class="animate-spin h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    加载中...
+                </div>
+            `;
+            
+            try {
+                let url = '/api/browse';
+                if (path) {
+                    url += '?path=' + encodeURIComponent(path);
+                }
+                
+                const res = await fetch(url);
+                if (!res.ok) throw new Error('加载失败');
+                
+                const data = await res.json();
+                currentBrowsePath = data.current_path;
+                currentPathDisplay.textContent = data.current_path;
+                btnParent.disabled = !data.parent_path || data.parent_path.length === 0;
+                
+                if (data.entries.length === 0) {
+                    dirList.innerHTML = `
+                        <div class="text-center py-8 text-gray-400">
+                            此目录为空
+                        </div>
+                    `;
+                    return;
+                }
+                
+                let html = '';
+                data.entries.forEach(entry => {
+                    const icon = entry.is_dir 
+                        ? `<svg class="w-5 h-5 text-yellow-500" fill="currentColor" viewBox="0 0 20 20">
+                            <path d="M2 6a2 2 0 012-2h5l2 2h5a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"></path>
+                           </svg>`
+                        : `<svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                           </svg>`;
+                    
+                    const escapedPath = entry.path.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+                    
+                    html += `
+                        <div class="flex items-center gap-3 px-3 py-2 hover:bg-gray-50 rounded-lg cursor-pointer transition-colors ${entry.is_dir ? '' : 'opacity-50'}"
+                             onclick="${entry.is_dir ? `browseDirectory('${escapedPath}')` : ''}">
+                            ${icon}
+                            <span class="flex-1 truncate">${escapeHtml(entry.name)}</span>
+                            ${entry.is_dir ? '<span class="text-xs text-gray-400">文件夹</span>' : ''}
+                        </div>
+                    `;
+                });
+                
+                dirList.innerHTML = html;
+                
+            } catch (e) {
+                dirList.innerHTML = `
+                    <div class="text-center py-8 text-red-400">
+                        加载失败: ${e.message}
+                    </div>
+                `;
+            }
+        }
+
+        async function goToParent() {
+            if (!currentBrowsePath) return;
+            
+            const pathParts = currentBrowsePath.replace(/\\/g, '/').split('/');
+            pathParts.pop();
+            const parentPath = pathParts.join('/') || '.';
+            
+            await browseDirectory(parentPath);
+        }
+
+        function confirmSelection() {
+            if (currentPickerTarget && currentBrowsePath) {
+                document.getElementById(currentPickerTarget).value = currentBrowsePath;
+            }
+            closeDirPicker();
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        async function loadSettings() {
+            try {
+                const res = await fetch('/api/settings');
+                if (res.ok) {
+                    const settings = await res.json();
+                    document.getElementById('download_dir').value = settings.download_dir || DEFAULT_SETTINGS.download_dir;
+                    document.getElementById('temp_dir').value = settings.temp_dir || DEFAULT_SETTINGS.temp_dir;
+                    document.getElementById('concurrent').value = settings.concurrent || DEFAULT_SETTINGS.concurrent;
+                    document.getElementById('concurrentValue').textContent = settings.concurrent || DEFAULT_SETTINGS.concurrent;
+                    document.getElementById('retry').value = settings.retry || DEFAULT_SETTINGS.retry;
+                    document.getElementById('retryValue').textContent = settings.retry || DEFAULT_SETTINGS.retry;
+                    document.getElementById('ffmpeg_path').value = settings.ffmpeg_path || '';
+                    document.getElementById('timeout').value = settings.timeout || DEFAULT_SETTINGS.timeout;
+                } else {
+                    loadDefaults();
+                }
+            } catch (e) {
+                console.error('Failed to load settings:', e);
+                loadDefaults();
+            }
+        }
+
+        function loadDefaults() {
+            document.getElementById('download_dir').value = DEFAULT_SETTINGS.download_dir;
+            document.getElementById('temp_dir').value = DEFAULT_SETTINGS.temp_dir;
+            document.getElementById('concurrent').value = DEFAULT_SETTINGS.concurrent;
+            document.getElementById('concurrentValue').textContent = DEFAULT_SETTINGS.concurrent;
+            document.getElementById('retry').value = DEFAULT_SETTINGS.retry;
+            document.getElementById('retryValue').textContent = DEFAULT_SETTINGS.retry;
+            document.getElementById('ffmpeg_path').value = '';
+            document.getElementById('timeout').value = DEFAULT_SETTINGS.timeout;
+        }
+
+        function resetSettings() {
+            if (confirm('确定要重置所有设置为默认值吗？')) {
+                loadDefaults();
+                showToast('已重置为默认值');
+            }
+        }
+
+        document.getElementById('settingsForm').addEventListener('submit', async e => {
+            e.preventDefault();
+            const formData = new FormData(e.target);
+            const settings = {
+                download_dir: formData.get('download_dir') || DEFAULT_SETTINGS.download_dir,
+                temp_dir: formData.get('temp_dir') || DEFAULT_SETTINGS.temp_dir,
+                concurrent: parseInt(formData.get('concurrent')) || DEFAULT_SETTINGS.concurrent,
+                retry: parseInt(formData.get('retry')) || DEFAULT_SETTINGS.retry,
+                ffmpeg_path: formData.get('ffmpeg_path') || '',
+                timeout: parseInt(formData.get('timeout')) || DEFAULT_SETTINGS.timeout
+            };
+
+            try {
+                const res = await fetch('/api/settings', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(settings)
+                });
+
+                if (res.ok) {
+                    showToast('设置已保存');
+                } else {
+                    const error = await res.json();
+                    showToast(error.error || '保存失败', 'error');
+                }
+            } catch (e) {
+                showToast('请求失败: ' + e.message, 'error');
+            }
+        });
+
+        loadSettings();
+    </script>
+</body>
+</html>

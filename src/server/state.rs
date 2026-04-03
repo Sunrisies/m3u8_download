@@ -7,6 +7,29 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppSettings {
+    pub download_dir: String,
+    pub temp_dir: String,
+    pub concurrent: usize,
+    pub retry: usize,
+    pub ffmpeg_path: String,
+    pub timeout: u64,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            download_dir: "./output".to_string(),
+            temp_dir: "./temp".to_string(),
+            concurrent: 8,
+            retry: 4,
+            ffmpeg_path: String::new(),
+            timeout: 30,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum TaskStatus {
     Pending,
@@ -41,15 +64,17 @@ pub struct DownloadRequest {
 #[derive(Clone)]
 pub struct AppState {
     pub tasks: Arc<RwLock<HashMap<String, TaskInfo>>>,
-    pub max_concurrent: usize,
+    pub settings: Arc<RwLock<AppSettings>>,
+    pub settings_file: PathBuf,
     pub data_file: PathBuf,
 }
 
 impl AppState {
-    pub fn new(max_concurrent: usize, data_file: PathBuf) -> Self {
+    pub fn new(data_file: PathBuf, settings_file: PathBuf) -> Self {
         Self {
             tasks: Arc::new(RwLock::new(HashMap::new())),
-            max_concurrent,
+            settings: Arc::new(RwLock::new(AppSettings::default())),
+            settings_file,
             data_file,
         }
     }
@@ -61,22 +86,53 @@ impl AppState {
             let len = {
                 let mut lock = self.tasks.write().await;
                 *lock = tasks;
-                lock.len() // 返回长度，然后 lock 在这里被 drop
+                lock.len()
             };
             log::info!("已加载 {len} 个历史任务");
         }
+
+        if self.settings_file.exists() {
+            let content = tokio::fs::read_to_string(&self.settings_file).await?;
+            let settings: AppSettings = serde_json::from_str(&content)?;
+            *self.settings.write().await = settings;
+            log::info!("✅ 已加载设置: {:?}", self.settings.read().await);
+        } else {
+            log::info!("📝 设置文件不存在，使用默认设置: {:?}", self.settings.read().await);
+        }
+
         Ok(())
     }
 
     pub async fn save(&self) -> Result<()> {
-        let content = serde_json::to_string_pretty(&*self.tasks.read().await)?;
+        let tasks_content = serde_json::to_string_pretty(&*self.tasks.read().await)?;
 
-        // 确保父目录存在
         if let Some(parent) = self.data_file.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
 
-        tokio::fs::write(&self.data_file, content).await?;
+        tokio::fs::write(&self.data_file, tasks_content).await?;
+        Ok(())
+    }
+
+    pub async fn save_settings(&self) -> Result<()> {
+        let settings_content = serde_json::to_string_pretty(&*self.settings.read().await)?;
+
+        if let Some(parent) = self.settings_file.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+
+        tokio::fs::write(&self.settings_file, settings_content).await?;
+        log::info!("设置已保存");
+        Ok(())
+    }
+
+    pub async fn get_settings(&self) -> AppSettings {
+        self.settings.read().await.clone()
+    }
+
+    pub async fn update_settings(&self, new_settings: AppSettings) -> Result<()> {
+        *self.settings.write().await = new_settings;
+        self.save_settings().await?;
         Ok(())
     }
 

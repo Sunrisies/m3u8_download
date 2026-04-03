@@ -57,9 +57,10 @@ async fn main() -> Result<()> {
         }) => {
             log::info!("🚀 启动Web服务模式...");
             log::info!("📡 主机: {host}:{port}");
-            log::info!("⚡ 最大并发数: {concurrent}",);
+            log::info!("⚡ 最大并发数: {concurrent} (可通过设置页面修改)");
+            log::info!("💡 提示: 并发数可在运行后通过设置页面调整");
 
-            server::start_server(&host, port, concurrent).await?;
+            server::start_server(&host, port).await?;
         }
         Some(Commands::Batch { file, concurrent }) => {
             log::info!("📦 启动批量下载模式...");
@@ -73,12 +74,11 @@ async fn main() -> Result<()> {
             }
         }
         None => {
-            // 默认启动服务模式
             log::info!("🚀 启动Web服务模式（默认）...");
             log::info!("📡 主机: 0.0.0.0:8080");
-            log::info!("⚡ 最大并发数: 8");
+            log::info!("💡 提示: 访问 http://0.0.0.0:8080 使用Web界面");
 
-            server::start_server("0.0.0.0", 8080, 8).await?;
+            server::start_server("0.0.0.0", 8080).await?;
         }
     }
 
