@@ -20,7 +20,7 @@
     // 初始化顶层存储
     if (realWin.top === realWin.self) realWin.__m3u8Links = realWin.__m3u8Links || new Set();
 
-    // ========== 注入页面拦截脚本 ==========
+    // ========== 注入页面拦截脚本（修复版） ==========
     const injectScript = `
     (function() {
         window.__m3u8Links = window.__m3u8Links || new Set();
@@ -34,16 +34,31 @@
                 }
             } catch(e) {}
         };
-        // 劫持 XHR/fetch/WebSocket
+
+        // ----- 修复 WebSocket 劫持（保留所有静态属性和原型）-----
+        const OriginalWebSocket = window.WebSocket;
+        class InterceptedWebSocket extends OriginalWebSocket {
+            constructor(url, protocols) {
+                super(url, protocols);
+                add(url);   // 拦截 m3u8 地址
+            }
+        }
+        // 确保所有静态属性被完整继承（extends 已继承，但某些环境下可能缺失，手动复制一次确保）
+        Object.setPrototypeOf(InterceptedWebSocket, OriginalWebSocket);
+        // 替换全局 WebSocket
+        window.WebSocket = InterceptedWebSocket;
+
+        // ----- XHR 劫持（无侵入）-----
         const xhrOpen = XMLHttpRequest.prototype.open;
         XMLHttpRequest.prototype.open = function(m, u) { this._url = u; return xhrOpen.apply(this, arguments); };
         const xhrSend = XMLHttpRequest.prototype.send;
         XMLHttpRequest.prototype.send = function(b) { if (this._url) add(this._url); return xhrSend.apply(this, arguments); };
+
+        // ----- fetch 劫持（无侵入）-----
         const origFetch = window.fetch;
         window.fetch = function(i) { add(typeof i === 'string' ? i : i.url); return origFetch.apply(this, arguments); };
-        const origWS = window.WebSocket;
-        window.WebSocket = function(u) { add(u); return new origWS(u); };
-        // 监听 DOM 变化
+
+        // ----- 监听 DOM 变化与扫描（保持不变）-----
         new MutationObserver(muts => {
             muts.forEach(m => {
                 if (m.type === 'attributes' && (m.attributeName === 'src' || m.attributeName === 'href')) {
@@ -58,7 +73,7 @@
                 }
             });
         }).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['src','href'] });
-        // 扫描现有元素
+
         const scan = () => document.querySelectorAll('[src],[href],[data-src],[data-href],video,audio,source').forEach(el => {
             let s = el.src || el.getAttribute('src') || el.href || el.getAttribute('href') || el.currentSrc;
             if(s) add(s);

@@ -4,7 +4,7 @@ use anyhow::{Result, anyhow};
 type Aes128CbcDec = cbc::Decryptor<Aes128>;
 
 /// 解密TS片段数据
-pub fn decrypt_segment(data: Vec<u8>, key: &[u8], segment_index: usize) -> Result<Vec<u8>> {
+pub fn decrypt_segment(data: &[u8], key: &[u8], segment_index: usize) -> Result<Vec<u8>> {
     if key.len() != 16 {
         return Err(anyhow!("AES 密钥长度必须为 16 字节"));
     }
@@ -17,7 +17,7 @@ pub fn decrypt_segment(data: Vec<u8>, key: &[u8], segment_index: usize) -> Resul
     let cipher = Aes128CbcDec::new(key.into(), &iv.into());
 
     // 解密数据
-    let mut decrypted = data.clone();
+    let mut decrypted = data.to_owned();
     let decrypted_data = cipher
         .decrypt_padded_mut::<Pkcs7>(&mut decrypted)
         .map_err(|e| anyhow!("解密失败: {e:?}"))?;
@@ -37,7 +37,7 @@ pub async fn extract_encryption_key(
             && let Some(uri_start) = line.find("URI=\"")
         {
             let uri_start = uri_start + 5; // "URI=\"的长度
-            if let Some(uri_end) = line[uri_start..].find("\"") {
+            if let Some(uri_end) = line[uri_start..].find('\"') {
                 let key_uri = &line[uri_start..uri_start + uri_end];
                 return Ok(Some(download_key(client, base_url, key_uri).await?));
             }

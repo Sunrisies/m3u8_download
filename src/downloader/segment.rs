@@ -1,11 +1,11 @@
 use crate::utils::get_segment_filename;
 use anyhow::{Result, anyhow};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tokio::fs;
 
 /// 合并所有视频片段
 pub async fn merge_segments(
-    download_dir: &PathBuf,
+    download_dir: &Path,
     segments: &[m3u8_rs::MediaSegment],
     output_path: &PathBuf,
 ) -> Result<()> {

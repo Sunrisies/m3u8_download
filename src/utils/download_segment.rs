@@ -69,7 +69,7 @@ impl M3u8Downloader {
             base_url.scheme(),
             base_url.host_str().unwrap_or("")
         );
-        let referer = format!("{}/", origin);
+        let referer = format!("{origin}/");
 
         let client = Client::builder()
             .timeout(Duration::from_secs(30))
@@ -340,15 +340,14 @@ impl M3u8Downloader {
                     index, segment_filename
                 );
                 return Ok(());
-            } else {
-                error!(
-                    "片段 {} ({}) 已存在但校验失败，将重新下载",
-                    index, segment_filename
-                );
-                // 删除损坏的文件
-                if let Err(e) = fs::remove_file(&segment_path) {
-                    error!("删除损坏文件失败 {}: {}", segment_path.display(), e);
-                }
+            }
+            error!(
+                "片段 {} ({}) 已存在但校验失败，将重新下载",
+                index, segment_filename
+            );
+            // 删除损坏的文件
+            if let Err(e) = fs::remove_file(&segment_path) {
+                error!("删除损坏文件失败 {}: {}", segment_path.display(), e);
             }
         }
 
@@ -376,7 +375,7 @@ impl M3u8Downloader {
 
         // 如果有加密，进行解密
         if let Some(key_data) = key {
-            data = decrypt_segment(data, key_data, index)?;
+            data = decrypt_segment(&data, key_data, index)?;
         }
 
         // 保存到下载目录

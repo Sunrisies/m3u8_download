@@ -248,8 +248,8 @@ pub async fn get_failed_tasks(State(state): State<AppState>) -> impl IntoRespons
     Json(tasks)
 }
 
-pub async fn get_stats(State(state): State<AppState>) -> impl IntoResponse {
-    let stats = state.get_stats().await;
+pub async fn get_stats(State(app_state): State<AppState>) -> impl IntoResponse {
+    let stats = app_state.get_stats().await;
     Json(stats)
 }
 
