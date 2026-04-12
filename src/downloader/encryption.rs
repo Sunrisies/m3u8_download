@@ -1,12 +1,13 @@
 use aes::Aes128;
 use aes::cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7};
-use anyhow::{Result, anyhow};
+use crate::config::*;
+use crate::error::{Result, DownloadError};
 type Aes128CbcDec = cbc::Decryptor<Aes128>;
 
 /// 解密TS片段数据
 pub fn decrypt_segment(data: &[u8], key: &[u8], segment_index: usize) -> Result<Vec<u8>> {
-    if key.len() != 16 {
-        return Err(anyhow!("AES 密钥长度必须为 16 字节"));
+    if key.len() != AES_KEY_LENGTH {
+        return Err(DownloadError::key(format!("AES 密钥长度必须为 {} 字节", AES_KEY_LENGTH)));
     }
 
     // 使用片段索引作为IV（初始化向量）
@@ -20,7 +21,7 @@ pub fn decrypt_segment(data: &[u8], key: &[u8], segment_index: usize) -> Result<
     let mut decrypted = data.to_owned();
     let decrypted_data = cipher
         .decrypt_padded_mut::<Pkcs7>(&mut decrypted)
-        .map_err(|e| anyhow!("解密失败: {e:?}"))?;
+        .map_err(|e| DownloadError::decryption(format!("解密失败: {e:?}")))?;
 
     Ok(decrypted_data.to_vec())
 }
@@ -56,7 +57,7 @@ async fn download_key(
     let response = client.get(&full_url).send().await?;
 
     if !response.status().is_success() {
-        return Err(anyhow!("密钥下载失败: {}", response.status()));
+        return Err(DownloadError::http(response.status().as_u16(), full_url));
     }
 
     Ok(response.bytes().await?.to_vec())

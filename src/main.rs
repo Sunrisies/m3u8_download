@@ -1,9 +1,12 @@
-use anyhow::Result;
 use clap::{Parser, Subcommand};
 
+mod config;
 mod downloader;
+mod error;
 mod server;
 mod utils;
+
+use error::Result;
 
 #[derive(Parser)]
 #[command(name = "m3u8-downloader")]

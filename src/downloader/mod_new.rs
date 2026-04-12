@@ -85,17 +85,13 @@ pub async fn process_download_task(
     };
     // 创建输出目录
     if !Path::new(&output_dir).exists() {
-        fs::create_dir_all(&output_dir)
-            .await
-            .map_err(|e| DownloadError::file(&output_dir, format!("创建输出目录失败: {e}")))?;
+        fs::create_dir_all(&output_dir).await?;
     }
 
     // 确定下载目录（用于存储分段文件）
     let download_dir = format!("./downloads/{}", task.name);
     if !Path::new(&download_dir).exists() {
-        fs::create_dir_all(&download_dir)
-            .await
-            .map_err(|e| DownloadError::file(&download_dir, format!("创建下载目录失败: {e}")))?;
+        fs::create_dir_all(&download_dir).await?;
     }
 
     let args = Args {
@@ -141,9 +137,7 @@ pub async fn process_download_tasks(
 
     let download_dir = PathBuf::from("./output");
     if !download_dir.exists() {
-        tokio::fs::create_dir_all(&download_dir)
-            .await
-            .map_err(|e| DownloadError::file(&download_dir, format!("创建下载目录失败: {e}")))?;
+        tokio::fs::create_dir_all(&download_dir).await?;
     }
 
     // 预先检查哪些任务需要跳过
@@ -204,7 +198,8 @@ pub async fn process_download_tasks(
     }
 
     // 输出处理结果统计
-    info!("\n===== 处理结果统计 =====");
+    info!("
+===== 处理结果统计 =====");
     info!("总任务数: {}", tasks.len());
     info!("成功任务数: {}", successful_tasks.len());
     info!("失败任务数: {}", failed_tasks.len());
@@ -212,21 +207,24 @@ pub async fn process_download_tasks(
 
     // 新增跳过列表
     if !skipped_tasks.is_empty() {
-        info!("\n===== 跳过任务列表 =====");
+        info!("
+===== 跳过任务列表 =====");
         for name in &skipped_tasks {
             info!("⏭️ {name} (文件已存在)");
         }
     }
 
     if !failed_tasks.is_empty() {
-        info!("\n===== 失败任务列表 =====");
+        info!("
+===== 失败任务列表 =====");
         for (name, error) in &failed_tasks {
             info!("❌ {name}: {error}");
         }
     }
 
     if !successful_tasks.is_empty() {
-        info!("\n===== 成功任务列表 =====");
+        info!("
+===== 成功任务列表 =====");
         for name in &successful_tasks {
             info!("✅ {name}");
         }

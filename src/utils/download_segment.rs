@@ -1,8 +1,9 @@
+use crate::config::*;
 use crate::downloader::{
     Args, DownloadStats, decrypt_segment, extract_encryption_key, merge_segments,
     process_download_tasks,
 };
-use anyhow::{Result, anyhow};
+use crate::error::{DownloadError, Result};
 use futures::future::join_all;
 use indicatif::{ProgressBar, ProgressStyle};
 use log::{error, info};
@@ -20,12 +21,10 @@ use crate::utils::json_loader::load_download_tasks_from_json;
 use crate::utils::{is_valid_ts_file, resolve_url};
 
 /// 从JSON文件加载并处理下载任务（并发版）
-pub async fn load_and_process_download_tasks(
-    json_path: &str,
-    max_concurrent: usize,
-) -> Result<(), String> {
+pub async fn load_and_process_download_tasks(json_path: &str, max_concurrent: usize) -> Result<()> {
     // 加载下载任务
-    let tasks = load_download_tasks_from_json(json_path)?;
+    let tasks = load_download_tasks_from_json(json_path)
+        .map_err(|e| DownloadError::parse(format!("加载JSON任务失败: {e}")))?;
     // 处理下载任务
     process_download_tasks(&tasks, max_concurrent).await
 }
@@ -51,7 +50,8 @@ pub struct M3u8Downloader {
 
 impl M3u8Downloader {
     pub fn new(args: Args) -> Result<Self> {
-        let base_url = Url::parse(&args.url)?;
+        let base_url =
+            Url::parse(&args.url).map_err(|e| DownloadError::parse(format!("URL解析失败: {e}")))?;
         let download_dir = PathBuf::from(&args.download_dir);
         let output_dir = PathBuf::from(&args.output_dir);
         let index = args.index;
@@ -72,11 +72,11 @@ impl M3u8Downloader {
         let referer = format!("{origin}/");
 
         let client = Client::builder()
-            .timeout(Duration::from_secs(30))
-            .connect_timeout(Duration::from_secs(10))
-            .pool_idle_timeout(Duration::from_secs(90))
-            .pool_max_idle_per_host(32)
-            .tcp_keepalive(Duration::from_secs(60))
+            .timeout(Duration::from_secs(HTTP_TIMEOUT_SECONDS))
+            .connect_timeout(Duration::from_secs(HTTP_CONNECT_TIMEOUT_SECONDS))
+            .pool_idle_timeout(Duration::from_secs(POOL_IDLE_TIMEOUT_SECONDS))
+            .pool_max_idle_per_host(POOL_MAX_IDLE_PER_HOST)
+            .tcp_keepalive(Duration::from_secs(TCP_KEEPALIVE_SECONDS))
             .tcp_nodelay(true)
 
             .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
@@ -226,8 +226,8 @@ impl M3u8Downloader {
         for (i, result) in results.into_iter().enumerate() {
             match result {
                 Ok(Ok(())) => {}
-                Ok(Err(e)) => return Err(anyhow!("片段 {i} 下载失败: {e}")),
-                Err(e) => return Err(anyhow!("片段 {i} 任务失败: {e}")),
+                Ok(Err(e)) => return Err(DownloadError::segment(i, 0, e.to_string())),
+                Err(e) => return Err(DownloadError::segment(i, 0, e.to_string())),
             }
         }
 
@@ -249,13 +249,21 @@ impl M3u8Downloader {
 
     async fn download_text(&self, url: &str) -> Result<String> {
         let full_url = resolve_url(&self.base_url, url)?;
-        let response = self.client.get(full_url).send().await?;
+        let response = self
+            .client
+            .get(&full_url)
+            .send()
+            .await
+            .map_err(|e| DownloadError::http(0, format!("请求失败: {e}")))?;
 
         if !response.status().is_success() {
-            return Err(anyhow!("HTTP 错误: {}", response.status()));
+            return Err(DownloadError::http(response.status().as_u16(), full_url));
         }
 
-        Ok(response.text().await?)
+        response
+            .text()
+            .await
+            .map_err(|e| DownloadError::parse(format!("读取响应失败: {e}")))
     }
 
     async fn download_segment(
@@ -304,10 +312,7 @@ impl M3u8Downloader {
                 Err(e) => {
                     retry_count += 1;
                     if retry_count > self.retry {
-                        return Err(anyhow!(
-                            "片段 {index} 下载失败，已重试 {} 次: {e}",
-                            self.retry
-                        ));
+                        return Err(DownloadError::segment(index, self.retry, e.to_string()));
                     }
                     error!(
                         "片段 {index} 下载失败，正在重试 ({retry_count}/{})...",
@@ -359,13 +364,22 @@ impl M3u8Downloader {
 
         let segment_url = resolve_url(&current_url, &segment.uri)?;
         // info!("正在下载片段 {}: {}", index, segment_url);
-        let response = self.client.get(segment_url).send().await?;
+        let response = self
+            .client
+            .get(&segment_url)
+            .send()
+            .await
+            .map_err(|e| DownloadError::http(0, format!("请求失败: {e}")))?;
 
         if !response.status().is_success() {
-            return Err(anyhow!("HTTP 错误: {}", response.status()));
+            return Err(DownloadError::http(response.status().as_u16(), segment_url));
         }
 
-        let mut data = response.bytes().await?.to_vec();
+        let mut data = response
+            .bytes()
+            .await
+            .map_err(|e| DownloadError::parse(format!("读取响应体失败: {e}")))?
+            .to_vec();
 
         // 更新下载字节数
         {
@@ -379,10 +393,18 @@ impl M3u8Downloader {
         }
 
         // 保存到下载目录
-        let file = tokio::fs::File::create(&segment_path).await?;
-        let mut writer = tokio::io::BufWriter::with_capacity(64 * 1024, file); // 64KB缓冲区
-        writer.write_all(&data).await?;
-        writer.flush().await?;
+        let file = tokio::fs::File::create(&segment_path)
+            .await
+            .map_err(|e| DownloadError::file(&segment_path, e.to_string()))?;
+        let mut writer = tokio::io::BufWriter::with_capacity(WRITE_BUFFER_SIZE, file);
+        writer
+            .write_all(&data)
+            .await
+            .map_err(|e| DownloadError::file(&segment_path, e.to_string()))?;
+        writer
+            .flush()
+            .await
+            .map_err(|e| DownloadError::file(&segment_path, e.to_string()))?;
         // info!("片段 {} 已保存到 {}", index, segment_path.display());
 
         Ok(())
@@ -406,10 +428,9 @@ impl M3u8Downloader {
     }
 
     fn parse_m3u8(content: &str) -> Result<MediaPlaylist> {
-        match m3u8_rs::parse_media_playlist(content.as_bytes()) {
-            Ok((_, playlist)) => Ok(playlist),
-            Err(e) => Err(anyhow!("M3U8 解析失败: {e:?}")),
-        }
+        m3u8_rs::parse_media_playlist(content.as_bytes())
+            .map(|(_, playlist)| playlist)
+            .map_err(|e| DownloadError::parse(format!("M3U8 解析失败: {e:?}")))
     }
 
     fn clone(&self) -> Self {

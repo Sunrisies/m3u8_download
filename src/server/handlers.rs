@@ -15,6 +15,7 @@ use std::time::Duration;
 use std::{env::current_dir, path::Path};
 use tokio::time::interval;
 
+use crate::config::*;
 use crate::server::state::{AppSettings, AppState, DownloadRequest, TaskStatus};
 
 #[derive(Serialize)]
@@ -292,7 +293,7 @@ pub async fn websocket_handler(
 }
 
 async fn handle_websocket(mut socket: WebSocket, task_id: String, state: AppState) {
-    let mut interval = interval(Duration::from_millis(500));
+    let mut interval = interval(Duration::from_millis(WS_UPDATE_INTERVAL_MS));
 
     loop {
         tokio::select! {

@@ -1,4 +1,5 @@
-use anyhow::{Result, anyhow};
+use crate::config::*;
+use crate::error::{Result, DownloadError};
 use log::info;
 use std::fs::File;
 use std::io::Read;
@@ -12,7 +13,7 @@ pub fn is_valid_ts_file(path: &Path) -> bool {
         let mut buffer = [0u8; 4];
         if file.read_exact(&mut buffer).is_ok() {
             // TS文件通常以0x47开头（MPEG-TS同步字节）
-            buffer[0] == 0x47
+            buffer[0] == TS_SYNC_BYTE
         } else {
             false
         }
@@ -27,7 +28,7 @@ pub fn resolve_url(base_url: &url::Url, url: &str) -> Result<String> {
         base_url
             .join(url)
             .map(|u| u.to_string())
-            .map_err(|e| anyhow!(format!("URL解析失败: {e}")))
+            .map_err(|e| DownloadError::parse(format!("URL解析失败: {e}")))
     }
 }
 

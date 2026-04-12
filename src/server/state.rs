@@ -7,6 +7,8 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
+use crate::config::*;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     pub download_dir: String,
@@ -22,10 +24,10 @@ impl Default for AppSettings {
         Self {
             download_dir: "./output".to_string(),
             temp_dir: "./temp".to_string(),
-            concurrent: 8,
-            retry: 4,
+            concurrent: DEFAULT_CONCURRENT_DOWNLOADS,
+            retry: DEFAULT_RETRY_COUNT,
             ffmpeg_path: String::new(),
-            timeout: 30,
+            timeout: HTTP_TIMEOUT_SECONDS,
         }
     }
 }
