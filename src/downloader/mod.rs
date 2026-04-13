@@ -13,6 +13,7 @@ use tokio::{fs, time::Instant};
 use crate::config::*;
 use crate::error::{DownloadError, Result};
 use crate::utils::{DownloadTask, download_segment::M3u8Downloader, is_already_downloaded};
+use crate::validation;
 
 #[derive(Parser)]
 pub struct Args {
@@ -87,6 +88,9 @@ pub async fn process_download_task(
         format!("{}/{}", task.output_dir, task.name)
     };
 
+    // 验证输出路径安全
+    validation::validate_path_safe(Path::new(&task.output_dir), &task.name)?;
+    
     // 创建输出目录
     if !Path::new(&output_dir).exists() {
         fs::create_dir_all(&output_dir).await?;

@@ -4,6 +4,7 @@ use crate::downloader::{
     process_download_tasks,
 };
 use crate::error::{DownloadError, Result};
+use crate::validation;
 use futures::future::join_all;
 use indicatif::{ProgressBar, ProgressStyle};
 use log::{error, info};
@@ -50,6 +51,15 @@ pub struct M3u8Downloader {
 
 impl M3u8Downloader {
     pub fn new(args: Args) -> Result<Self> {
+        // 验证 URL
+        validation::validate_url(&args.url)?;
+
+        // 验证并发数
+        validation::validate_concurrent(args.concurrent)?;
+
+        // 验证重试次数
+        validation::validate_retry_count(args.retry)?;
+
         let base_url =
             Url::parse(&args.url).map_err(|e| DownloadError::parse(format!("URL解析失败: {e}")))?;
         let download_dir = PathBuf::from(&args.download_dir);

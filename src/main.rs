@@ -5,6 +5,7 @@ mod downloader;
 mod error;
 mod server;
 mod utils;
+mod validation;
 
 use error::Result;
 
@@ -58,6 +59,9 @@ async fn main() -> Result<()> {
             port,
             concurrent,
         }) => {
+            // 验证并发数
+            validation::validate_concurrent(concurrent)?;
+            
             log::info!("🚀 启动Web服务模式...");
             log::info!("📡 主机: {host}:{port}");
             log::info!("⚡ 最大并发数: {concurrent} (可通过设置页面修改)");
@@ -66,6 +70,9 @@ async fn main() -> Result<()> {
             server::start_server(&host, port).await?;
         }
         Some(Commands::Batch { file, concurrent }) => {
+            // 验证并发数
+            validation::validate_concurrent(concurrent)?;
+            
             log::info!("📦 启动批量下载模式...");
             log::info!("📄 任务文件: {file}");
             log::info!("⚡ 最大并发数: {concurrent}");
