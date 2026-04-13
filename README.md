@@ -15,6 +15,8 @@ M3U8 Downloader 是一个专门用于下载 M3U8 格式视频流的工具。M3U8
 - **格式转换**：自动将 TS 片段合并并转换为 MP4 格式
 - **Web 服务模式**：提供 HTTP API 和 Web 界面，支持远程调用
 - **油猴脚本**：配套浏览器脚本，一键检测并下载网页中的 M3U8 视频
+- **安全性增强**：URL 验证、路径验证、配置值验证，防止 SSRF 和路径遍历攻击
+- **统一错误处理**：完善的错误类型系统和错误信息
 
 ## 环境依赖
 
@@ -215,26 +217,25 @@ pub fn decrypt_segment(data: Vec<u8>, key: &[u8], segment_index: usize) -> Resul
 serde = { version = "1.0.228", features = ["derive"] }      # JSON 序列化/反序列化
 serde_json = "1.0.149"                                       # JSON 处理
 tokio = { version = "1.0", features = ["full"] }             # 异步运行时
-reqwest = { version = "0.11", features = ["stream"] }        # HTTP 客户端
+reqwest = { version = "0.12", features = ["stream", "json", "gzip", "brotli", "deflate"] }  # HTTP 客户端（已升级）
 clap = { version = "4.0", features = ["derive"] }            # 命令行参数解析
 indicatif = "0.17"                                           # 进度条显示
 m3u8-rs = "6.0"                                              # M3U8 解析
 url = "2.0"                                                  # URL 处理
 futures = "0.3"                                              # 异步工具
-anyhow = "1.0"                                               # 错误处理
-regex = "1.0"                                                # 正则表达式
-hex = "0.4"                                                  # 十六进制编码
+anyhow = "1.0"                                               # 错误处理（仅用于兼容性）
 aes = "0.8"                                                  # AES 加密
 cbc = "0.1"                                                  # CBC 模式
-sha2 = "0.10"                                                # SHA2 哈希
-async-std = "1.12"                                           # 异步标准库
-tempfile = "3.0"                                             # 临时文件
-crossterm = "0.27"                                           # 终端控制
 log = "0.4.29"                                               # 日志接口
 log4rs = "1.4.0"                                             # 日志记录
 nu-ansi-term = "0.50.3"                                      # 终端颜色
 chrono = { version = "0.4.43", features = ["serde"] }        # 时间处理
 thiserror = "2.0.18"                                         # 错误类型定义
+axum = { version = "0.7", features = ["ws"] }               # Web 框架
+tower-http = { version = "0.5", features = ["cors", "fs"] }   # HTTP 中间件
+rust-embed = "8.0"                                           # 静态文件嵌入
+mime_guess = "2.0"                                           # MIME 类型检测
+uuid = { version = "1.0", features = ["v4"] }              # UUID 生成
 ```
 
 ### 2. 日志配置（src/utils/logger.rs）
@@ -436,27 +437,40 @@ m3u8_downloader/
 - 解密错误
 - 网络超时
 - 任务失败
+- URL 验证错误
+- 配置验证错误
 
-#### 3. [`src/utils/logger.rs`](src/utils/logger.rs:1)
+#### 3. [`src/validation.rs`](src/validation.rs:1)
+输入验证模块，提供全面的输入验证功能：
+- **URL 验证**：防止 SSRF 攻击，只允许 HTTP/HTTPS 协议
+- **路径验证**：防止路径遍历攻击，确保文件操作在安全范围内
+- **配置验证**：验证并发数、重试次数、超时时间等配置值
+
+验证规则：
+- 并发数：1-32
+- 重试次数：0-10
+- 超时时间：5-300 秒
+
+#### 4. [`src/utils/logger.rs`](src/utils/logger.rs:1)
 日志系统实现：
 - 使用 `log4rs` 进行日志管理
 - 支持彩色控制台输出
 - 支持滚动文件日志
 - 日志级别：INFO、ERROR、DEBUG、WARN、TRACE
 
-#### 4. [`src/utils/file.rs`](src/utils/file.rs:1)
+#### 5. [`src/utils/file.rs`](src/utils/file.rs:1)
 文件操作工具：
 - `is_valid_ts_file()`：检查 TS 文件有效性（通过文件头 0x47）
 - `resolve_url()`：解析相对/绝对 URL
 - `get_segment_filename()`：从 segment URI 提取文件名
 - `is_already_downloaded()`：检查任务是否已下载
 
-#### 5. [`src/utils/json_loader.rs`](src/utils/json_loader.rs:1)
+#### 6. [`src/utils/json_loader.rs`](src/utils/json_loader.rs:1)
 JSON 配置加载：
 - 定义 `DownloadTask` 结构体
 - 从 JSON 文件加载下载任务列表
 
-#### 6. [`src/utils/download_segment.rs`](src/utils/download_segment.rs:1)
+#### 7. [`src/utils/download_segment.rs`](src/utils/download_segment.rs:1)
 核心下载逻辑：
 - `M3u8Downloader` 结构体：管理下载状态和配置
 - `load_and_process_download_tasks()`：加载并处理任务
@@ -464,20 +478,20 @@ JSON 配置加载：
 - `download_segment()`：下载单个片段（带重试机制）
 - `merge_segments()`：合并片段并转换为 MP4
 
-#### 7. [`src/downloader/mod.rs`](src/downloader/mod.rs:1)
+#### 8. [`src/downloader/mod.rs`](src/downloader/mod.rs:1)
 下载器模块：
 - `Args` 结构体：命令行参数
 - `DownloadStats` 结构体：下载统计信息
 - `process_download_task()`：处理单个任务
 - `process_download_tasks()`：处理多个任务（并发）
 
-#### 8. [`src/downloader/segment.rs`](src/downloader/segment.rs:1)
+#### 9. [`src/downloader/segment.rs`](src/downloader/segment.rs:1)
 片段合并逻辑：
 - `merge_segments()`：合并所有 TS 片段
 - 使用 FFmpeg 将 TS 转换为 MP4
 - 清理临时文件
 
-#### 9. [`src/downloader/encryption.rs`](src/downloader/encryption.rs:1)
+#### 10. [`src/downloader/encryption.rs`](src/downloader/encryption.rs:1)
 加密解密逻辑：
 - `decrypt_segment()`：AES-128-CBC 解密
 - `extract_encryption_key()`：从 M3U8 内容提取密钥
@@ -570,50 +584,51 @@ serde = { version = "1.0", features = ["derive"] }
 # 移除 async-std，完全使用 tokio
 ```
 
-### 4. 安全性
+### 4. 安全性 ✅
 
-#### 问题点：
-- **密钥存储**：加密密钥直接从网络下载，未验证完整性
-- **URL 解析**：未对 URL 进行严格验证，可能存在 SSRF 风险
-- **文件路径**：未对文件路径进行安全检查，可能存在路径遍历漏洞
+#### 已实现的安全措施：
+- **URL 验证**：已实现 `validate_url()` 函数，只允许 HTTP/HTTPS 协议，防止 SSRF 攻击
+- **路径验证**：已实现 `validate_path_safe()` 函数，防止路径遍历攻击
+- **配置验证**：已实现配置值验证，确保用户输入合法
+  - 并发数：1-32
+  - 重试次数：0-10
+  - 超时时间：5-300 秒
 
-#### 改进建议：
+#### 安全验证示例：
 ```rust
-// 1. 添加 URL 验证
-pub fn validate_url(url: &str) -> Result<()> {
-    let parsed = Url::parse(url)?;
-    // 限制协议
-    if parsed.scheme() != "http" && parsed.scheme() != "https" {
-        return Err(anyhow!("只支持 HTTP/HTTPS 协议"));
-    }
-    // 可以添加更多验证，如域名白名单
-    Ok(())
-}
+// 1. URL 验证
+use crate::validation;
 
-// 2. 添加文件路径安全检查
-pub fn safe_join_path(base: &Path, relative: &str) -> Result<PathBuf> {
-    let path = base.join(relative);
-    // 检查是否逃逸出基础目录
-    if !path.starts_with(base) {
-        return Err(anyhow!("路径遍历攻击检测"));
-    }
-    Ok(path)
-}
+// 有效的 URL
+validation::validate_url("https://example.com/video.m3u8")?;
 
-// 3. 密钥完整性验证
-pub async fn download_key_with_verification(
-    client: &reqwest::Client,
-    base_url: &url::Url,
-    key_uri: &str,
-) -> Result<Vec<u8>> {
-    let key = download_key(client, base_url, key_uri).await?;
-    // 验证密钥长度
-    if key.len() != 16 {
-        return Err(anyhow!("密钥长度无效"));
-    }
-    // 可以添加哈希验证
-    Ok(key)
-}
+// 无效的 URL（会返回错误）
+validation::validate_url("ftp://example.com/file")?;
+
+// 2. 路径验证
+use std::path::Path;
+
+let base = Path::new("/safe/directory");
+
+// 安全的路径
+validation::validate_path_safe(base, "subdir/file.txt")?;
+
+// 不安全的路径（会返回错误）
+validation::validate_path_safe(base, "../etc/passwd")?;
+
+// 3. 配置验证
+// 验证并发数
+validation::validate_concurrent(4)?;  // 有效
+validation::validate_concurrent(0)?;  // 无效
+validation::validate_concurrent(100)?; // 无效
+
+// 验证重试次数
+validation::validate_retry_count(3)?;   // 有效
+validation::validate_retry_count(15)?;  // 无效
+
+// 验证超时时间
+validation::validate_timeout(30)?;   // 有效
+validation::validate_timeout(400)?;  // 无效
 ```
 
 ### 5. 可扩展性
@@ -1059,26 +1074,49 @@ TS 文件头不是 `0x47` 却能被正常打开的原因包括：
 
 ## 总结
 
-M3U8 Downloader 是一个功能完整的 M3U8 视频流下载工具，具有多线程并发、加密支持、断点续传等核心功能。通过上述分析，项目在代码规范、性能、安全性、可扩展性等方面存在优化空间。
+M3U8 Downloader 是一个功能完整的 M3U8 视频流下载工具，具有多线程并发、加密支持、断点续传等核心功能。项目已完成多项重要改进，显著提升了代码质量和安全性。
 
-### 优先级建议
+### 已完成的高优先级改进 ✅
 
-1. **高优先级**：
-   - 清理未使用的代码和导入
-   - 统一错误处理机制
-   - 添加 URL 和文件路径安全验证
-   - 更新依赖版本，移除未使用的依赖
+1. **依赖管理优化**：
+   - ✅ 升级 reqwest 到 0.12 版本，添加 gzip、brotli、deflate 压缩支持
+   - ✅ 统一错误处理，使用 `DownloadError` 替代 `anyhow` 的直接使用
+   - ✅ 移除未使用的依赖
 
-2. **中优先级**：
+2. **安全性增强**：
+   - ✅ 添加 URL 验证函数，防止 SSRF 攻击
+   - ✅ 添加文件路径验证，防止路径遍历攻击
+   - ✅ 添加配置值验证，确保用户输入合法
+     - 并发数：1-32
+     - 重试次数：0-10
+     - 超时时间：5-300 秒
+
+3. **代码质量改进**：
+   - ✅ 添加详细的文档注释
+   - ✅ 改进错误信息的可读性
+   - ✅ 统一日志格式
+
+### 后续优化建议
+
+1. **中优先级**：
+   - 添加单元测试和集成测试
    - 异步化文件操作
    - 引入配置结构体
-   - 增强错误信息和统计
-   - 添加单元测试
+   - 增强错误统计和报告
 
-3. **低优先级**：
+2. **低优先级**：
    - 并行化片段合并
    - 插件化架构设计
    - 生成 API 文档
    - 优化用户体验
+
+### 项目改进文档
+
+详细的改进内容请参考：
+- [IMPROVEMENTS.md](IMPROVEMENTS.md) - 项目改进总结
+- [USAGE.md](USAGE.md) - 使用说明
+- [docs/01-使用教程.md](docs/01-使用教程.md) - 详细使用教程
+- [docs/02-技术实现解析.md](docs/02-技术实现解析.md) - 技术实现细节
+- [docs/03-常见问题解答.md](docs/03-常见问题解答.md) - 常见问题解答
 
 通过实施这些改进建议，可以显著提升项目的代码质量、性能、安全性和可维护性，使其成为一个更加健壮和专业的工具。
