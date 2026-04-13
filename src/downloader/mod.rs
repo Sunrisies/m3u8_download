@@ -11,7 +11,7 @@ use log::{error, info};
 use tokio::{fs, time::Instant};
 
 use crate::config::*;
-use crate::error::{Result, DownloadError};
+use crate::error::{DownloadError, Result};
 use crate::utils::{DownloadTask, download_segment::M3u8Downloader, is_already_downloaded};
 
 #[derive(Parser)]
@@ -35,6 +35,7 @@ pub struct Args {
     /// 下载任务索引
     pub index: usize,
 }
+
 #[derive(Clone)]
 pub struct DownloadStats {
     pub total_segments: usize,
@@ -52,6 +53,7 @@ impl DownloadStats {
             start_time: Instant::now(),
         }
     }
+
     #[allow(clippy::cast_precision_loss)]
     pub fn get_speed(&self) -> f64 {
         let elapsed = self.start_time.elapsed().as_secs_f64();
@@ -61,6 +63,7 @@ impl DownloadStats {
             0.0
         }
     }
+
     #[allow(clippy::cast_precision_loss)]
     pub fn get_progress_percentage(&self) -> f64 {
         if self.total_segments > 0 {
@@ -83,19 +86,16 @@ pub async fn process_download_task(
     } else {
         format!("{}/{}", task.output_dir, task.name)
     };
+
     // 创建输出目录
     if !Path::new(&output_dir).exists() {
-        fs::create_dir_all(&output_dir)
-            .await
-            .map_err(|e| DownloadError::file(&output_dir, format!("创建输出目录失败: {e}")))?;
+        fs::create_dir_all(&output_dir).await?;
     }
 
     // 确定下载目录（用于存储分段文件）
     let download_dir = format!("./downloads/{}", task.name);
     if !Path::new(&download_dir).exists() {
-        fs::create_dir_all(&download_dir)
-            .await
-            .map_err(|e| DownloadError::file(&download_dir, format!("创建下载目录失败: {e}")))?;
+        fs::create_dir_all(&download_dir).await?;
     }
 
     let args = Args {
@@ -107,13 +107,10 @@ pub async fn process_download_task(
         output_dir,
         index,
     };
+
     match M3u8Downloader::new(args) {
         Ok(downloader) => {
-            downloader.download().await
-                .map_err(|e| {
-                    error!("❌ 下载失败: {e}");
-                    e
-                })?;
+            downloader.download().await?;
             info!("✅ 下载成功完成！");
             Ok(())
         }
@@ -125,10 +122,7 @@ pub async fn process_download_task(
 }
 
 /// 处理多个下载任务（并发版）
-pub async fn process_download_tasks(
-    tasks: &[DownloadTask],
-    max_concurrent: usize,
-) -> Result<()> {
+pub async fn process_download_tasks(tasks: &[DownloadTask], max_concurrent: usize) -> Result<()> {
     info!(
         "正在处理{}个下载任务，最大并发数: {}",
         tasks.len(),
@@ -141,9 +135,7 @@ pub async fn process_download_tasks(
 
     let download_dir = PathBuf::from("./output");
     if !download_dir.exists() {
-        tokio::fs::create_dir_all(&download_dir)
-            .await
-            .map_err(|e| DownloadError::file(&download_dir, format!("创建下载目录失败: {e}")))?;
+        tokio::fs::create_dir_all(&download_dir).await?;
     }
 
     // 预先检查哪些任务需要跳过
@@ -204,7 +196,7 @@ pub async fn process_download_tasks(
     }
 
     // 输出处理结果统计
-    info!("\n===== 处理结果统计 =====");
+    info!("===== 处理结果统计 =====");
     info!("总任务数: {}", tasks.len());
     info!("成功任务数: {}", successful_tasks.len());
     info!("失败任务数: {}", failed_tasks.len());
@@ -212,21 +204,21 @@ pub async fn process_download_tasks(
 
     // 新增跳过列表
     if !skipped_tasks.is_empty() {
-        info!("\n===== 跳过任务列表 =====");
+        info!("===== 跳过任务列表 =====");
         for name in &skipped_tasks {
             info!("⏭️ {name} (文件已存在)");
         }
     }
 
     if !failed_tasks.is_empty() {
-        info!("\n===== 失败任务列表 =====");
+        info!("===== 失败任务列表 =====");
         for (name, error) in &failed_tasks {
             info!("❌ {name}: {error}");
         }
     }
 
     if !successful_tasks.is_empty() {
-        info!("\n===== 成功任务列表 =====");
+        info!("===== 成功任务列表 =====");
         for name in &successful_tasks {
             info!("✅ {name}");
         }
@@ -234,7 +226,10 @@ pub async fn process_download_tasks(
 
     // 如果所有任务都失败，返回错误
     if failed_tasks.len() == tasks.len() {
-        return Err(DownloadError::task("批量任务", "所有任务都失败".to_string()));
+        return Err(DownloadError::task(
+            "批量任务",
+            "所有任务都失败".to_string(),
+        ));
     }
 
     Ok(())
