@@ -15,7 +15,7 @@ use std::time::Duration;
 use std::{env::current_dir, path::Path};
 use tokio::time::interval;
 
-use crate::config::*;
+use crate::config::WS_UPDATE_INTERVAL_MS;
 use crate::server::state::{AppSettings, AppState, DownloadRequest, TaskStatus};
 
 #[derive(Serialize)]

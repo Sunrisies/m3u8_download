@@ -13,7 +13,7 @@
 //! - `SegmentError`: 片段下载错误
 //! - `TaskError`: 任务执行错误
 //! - `KeyError`: 密钥错误
-//! - `FfmpegError`: FFmpeg 执行错误
+//! - `FfmpegError`: `FFmpeg` 执行错误
 //! - `Unknown`: 未知错误
 //! - `UrlValidationError`: URL 验证错误
 //! - `ValidationError`: 配置验证错误
@@ -92,9 +92,9 @@ pub enum DownloadError {
     #[error("加密密钥错误: {reason}")]
     KeyError { reason: String },
 
-    /// FFmpeg 执行错误
+    /// `FFmpeg` 执行错误
     ///
-    /// 当使用 FFmpeg 转换视频格式失败时产生。
+    /// 当使用 `FFmpeg` 转换视频格式失败时产生。
     #[error("FFmpeg执行失败: {error}")]
     FfmpegError { error: String },
 
@@ -125,40 +125,40 @@ pub type Result<T> = std::result::Result<T, DownloadError>;
 // 实现从常见错误类型的转换
 impl From<std::io::Error> for DownloadError {
     fn from(err: std::io::Error) -> Self {
-        DownloadError::file("unknown", err.to_string())
+        Self::file("unknown", err.to_string())
     }
 }
 
 impl From<reqwest::Error> for DownloadError {
     fn from(err: reqwest::Error) -> Self {
         if err.is_timeout() {
-            DownloadError::timeout("unknown", 30)
+            Self::timeout("unknown", 30)
         } else if err.is_status() {
-            DownloadError::http(
+            Self::http(
                 err.status().map_or(0, |s| s.as_u16()),
                 "unknown".to_string(),
             )
         } else {
-            DownloadError::parse(err.to_string())
+            Self::parse(err.to_string())
         }
     }
 }
 
 impl From<url::ParseError> for DownloadError {
     fn from(err: url::ParseError) -> Self {
-        DownloadError::parse(err.to_string())
+        Self::parse(err.to_string())
     }
 }
 
 impl From<anyhow::Error> for DownloadError {
     fn from(err: anyhow::Error) -> Self {
-        DownloadError::Unknown(err.to_string())
+        Self::Unknown(err.to_string())
     }
 }
 
 impl From<serde_json::Error> for DownloadError {
     fn from(err: serde_json::Error) -> Self {
-        DownloadError::parse(format!("JSON解析失败: {}", err))
+        Self::parse(format!("JSON解析失败: {err}"))
     }
 }
 
@@ -225,7 +225,7 @@ impl DownloadError {
         }
     }
 
-    /// 创建 FFmpeg 错误
+    /// 创建 `FFmpeg` 错误
     pub fn ffmpeg(error: impl Into<String>) -> Self {
         Self::FfmpegError {
             error: error.into(),

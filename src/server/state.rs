@@ -7,7 +7,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-use crate::config::*;
+use crate::config::{DEFAULT_CONCURRENT_DOWNLOADS, DEFAULT_RETRY_COUNT, HTTP_TIMEOUT_SECONDS};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
@@ -99,7 +99,10 @@ impl AppState {
             *self.settings.write().await = settings;
             log::info!("✅ 已加载设置: {:?}", self.settings.read().await);
         } else {
-            log::info!("📝 设置文件不存在，使用默认设置: {:?}", self.settings.read().await);
+            log::info!(
+                "📝 设置文件不存在，使用默认设置: {:?}",
+                self.settings.read().await
+            );
         }
 
         Ok(())

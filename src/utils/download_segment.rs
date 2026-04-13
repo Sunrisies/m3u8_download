@@ -1,4 +1,7 @@
-use crate::config::*;
+use crate::config::{
+    HTTP_CONNECT_TIMEOUT_SECONDS, HTTP_TIMEOUT_SECONDS, POOL_IDLE_TIMEOUT_SECONDS,
+    POOL_MAX_IDLE_PER_HOST, TCP_KEEPALIVE_SECONDS, WRITE_BUFFER_SIZE,
+};
 use crate::downloader::{
     Args, DownloadStats, decrypt_segment, extract_encryption_key, merge_segments,
     process_download_tasks,

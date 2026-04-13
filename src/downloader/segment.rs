@@ -1,6 +1,6 @@
+use crate::config::WRITE_BUFFER_SIZE;
+use crate::error::{DownloadError, Result};
 use crate::utils::get_segment_filename;
-use crate::config::*;
-use crate::error::{Result, DownloadError};
 use std::path::Path;
 // 使用FFmpeg将TS转换为MP4
 use std::process::Command;
@@ -15,7 +15,8 @@ pub async fn merge_segments(
 ) -> Result<()> {
     // 先合并为临时TS文件
     let temp_ts_path = download_dir.join("temp.ts");
-    let temp_file = fs::File::create(&temp_ts_path).await
+    let temp_file = fs::File::create(&temp_ts_path)
+        .await
         .map_err(|e| DownloadError::file(&temp_ts_path, e.to_string()))?;
     let mut writer = tokio::io::BufWriter::with_capacity(WRITE_BUFFER_SIZE, temp_file);
 
@@ -26,20 +27,27 @@ pub async fn merge_segments(
         if !segment_path.exists() {
             return Err(DownloadError::file(
                 &segment_path,
-                format!("片段文件不存在: {}", segment_path.display())
+                format!("片段文件不存在: {}", segment_path.display()),
             ));
         }
 
-        let mut segment_file = fs::File::open(&segment_path).await
+        let mut segment_file = fs::File::open(&segment_path)
+            .await
             .map_err(|e| DownloadError::file(&segment_path, e.to_string()))?;
         let mut buffer = Vec::new();
-        segment_file.read_to_end(&mut buffer).await
+        segment_file
+            .read_to_end(&mut buffer)
+            .await
             .map_err(|e| DownloadError::file(&segment_path, e.to_string()))?;
-        writer.write_all(&buffer).await
+        writer
+            .write_all(&buffer)
+            .await
             .map_err(|e| DownloadError::file(&temp_ts_path, e.to_string()))?;
     }
 
-    writer.flush().await
+    writer
+        .flush()
+        .await
         .map_err(|e| DownloadError::file(&temp_ts_path, e.to_string()))?;
 
     let output = Command::new("ffmpeg")

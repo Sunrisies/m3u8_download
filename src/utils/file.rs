@@ -1,5 +1,5 @@
-use crate::config::*;
-use crate::error::{Result, DownloadError};
+use crate::config::TS_SYNC_BYTE;
+use crate::error::{DownloadError, Result};
 use log::info;
 use std::fs::File;
 use std::io::Read;

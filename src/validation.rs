@@ -50,7 +50,7 @@ pub fn validate_url(url: &str) -> Result<()> {
         "http" | "https" => Ok(()),
         scheme => Err(DownloadError::url_validation(
             url,
-            format!("不支持的协议: {}，仅支持 http/https", scheme),
+            format!("不支持的协议: {scheme}，仅支持 http/https"),
         )),
     }
 }
@@ -122,14 +122,14 @@ pub fn validate_concurrent(concurrent: usize) -> Result<()> {
     if concurrent < MIN_CONCURRENT {
         return Err(DownloadError::validation(
             "concurrent",
-            format!("并发数过小，最小值为 {}", MIN_CONCURRENT),
+            format!("并发数过小，最小值为 {MIN_CONCURRENT}"),
         ));
     }
 
     if concurrent > MAX_CONCURRENT {
         return Err(DownloadError::validation(
             "concurrent",
-            format!("并发数过大，最大值为 {}", MAX_CONCURRENT),
+            format!("并发数过大，最大值为 {MAX_CONCURRENT}"),
         ));
     }
 
@@ -162,7 +162,7 @@ pub fn validate_retry_count(retry: usize) -> Result<()> {
     if retry > MAX_RETRY {
         return Err(DownloadError::validation(
             "retry",
-            format!("重试次数过大，最大值为 {}", MAX_RETRY),
+            format!("重试次数过大，最大值为 {MAX_RETRY}"),
         ));
     }
 

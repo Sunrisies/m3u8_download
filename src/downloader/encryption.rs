@@ -1,13 +1,15 @@
+use crate::config::AES_KEY_LENGTH;
+use crate::error::{DownloadError, Result};
 use aes::Aes128;
 use aes::cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7};
-use crate::config::*;
-use crate::error::{Result, DownloadError};
 type Aes128CbcDec = cbc::Decryptor<Aes128>;
 
 /// 解密TS片段数据
 pub fn decrypt_segment(data: &[u8], key: &[u8], segment_index: usize) -> Result<Vec<u8>> {
     if key.len() != AES_KEY_LENGTH {
-        return Err(DownloadError::key(format!("AES 密钥长度必须为 {} 字节", AES_KEY_LENGTH)));
+        return Err(DownloadError::key(format!(
+            "AES 密钥长度必须为 {AES_KEY_LENGTH} 字节"
+        )));
     }
 
     // 使用片段索引作为IV（初始化向量）
