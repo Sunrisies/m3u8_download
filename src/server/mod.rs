@@ -8,6 +8,7 @@ use axum::{
 use std::path::PathBuf;
 use tower_http::cors::CorsLayer;
 
+use crate::error::Result;
 use state::AppState;
 
 pub fn create_router(state: AppState) -> Router {
@@ -31,7 +32,7 @@ pub fn create_router(state: AppState) -> Router {
         .with_state(state)
 }
 
-pub async fn start_server(host: &str, port: u16) -> anyhow::Result<()> {
+pub async fn start_server(host: &str, port: u16) -> Result<()> {
     let data_file = PathBuf::from("./data/tasks.json");
     let settings_file = PathBuf::from("./data/settings.json");
     let state = AppState::new(data_file, settings_file);

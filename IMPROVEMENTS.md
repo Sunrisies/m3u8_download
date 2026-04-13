@@ -138,9 +138,6 @@ validation::validate_concurrent(100)?; // 无效
 validation::validate_retry_count(3)?;   // 有效
 validation::validate_retry_count(15)?;  // 无效
 
-// 验证超时时间
-validation::validate_timeout(30)?;   // 有效
-validation::validate_timeout(400)?;  // 无效
 ```
 
 ## 安全性改进总结

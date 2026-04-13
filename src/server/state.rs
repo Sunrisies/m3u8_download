@@ -1,4 +1,4 @@
-use anyhow::Result;
+use crate::error::Result;
 use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

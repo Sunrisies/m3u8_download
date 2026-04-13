@@ -156,6 +156,12 @@ impl From<anyhow::Error> for DownloadError {
     }
 }
 
+impl From<serde_json::Error> for DownloadError {
+    fn from(err: serde_json::Error) -> Self {
+        DownloadError::parse(format!("JSON解析失败: {}", err))
+    }
+}
+
 impl DownloadError {
     /// 创建 HTTP 错误
     pub fn http(status: u16, url: impl Into<String>) -> Self {
