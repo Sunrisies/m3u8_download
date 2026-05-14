@@ -22,6 +22,7 @@ use bytes::Bytes;
 
 use crate::downloader::M3u8Downloader;
 use crate::downloader::Args as DownloadArgs;
+use crate::utils::download_segment::quick_validate_m3u8;
 
 use crate::config::WS_UPDATE_INTERVAL_MS;
 use crate::server::state::{AppSettings, AppState, DownloadRequest, TaskStatus};
@@ -548,6 +549,13 @@ pub async fn stream_download(
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("创建输出目录失败: {}", e)}))).into_response();
     }
 
+    // 预先验证M3U8是否可解析
+    if let Err(e) = quick_validate_m3u8(&request.url).await {
+        let _ = std::fs::remove_dir_all(&download_dir);
+        let _ = std::fs::remove_dir_all(&output_dir);
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": format!("M3U8验证失败: {}", e)}))).into_response();
+    }
+
     let (tx, rx) = mpsc::channel::<std::result::Result<Bytes, String>>(32);
 
     let args = DownloadArgs {
@@ -589,3 +597,5 @@ pub async fn stream_download(
         }
     }
 }
+
+

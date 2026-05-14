@@ -483,3 +483,56 @@ impl M3u8Downloader {
         }
     }
 }
+
+/// 快速验证M3U8 URL是否可访问和解析
+pub async fn quick_validate_m3u8(url: &str) -> Result<()> {
+    use crate::config::{HTTP_TIMEOUT_SECONDS, HTTP_CONNECT_TIMEOUT_SECONDS};
+    
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(HTTP_TIMEOUT_SECONDS))
+        .connect_timeout(Duration::from_secs(HTTP_CONNECT_TIMEOUT_SECONDS))
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        .build()
+        .map_err(|e| DownloadError::parse(format!("创建HTTP客户端失败: {e}")))?;
+
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| DownloadError::http(0, format!("请求M3U8失败: {e}")))?;
+
+    if !response.status().is_success() {
+        return Err(DownloadError::http(response.status().as_u16(), url.to_string()));
+    }
+
+    let content = response
+        .text()
+        .await
+        .map_err(|e| DownloadError::parse(format!("读取M3U8响应失败: {e}")))?;
+
+    // 尝试解析为主播放列表
+    if let Ok((_, master)) = m3u8_rs::parse_master_playlist(content.as_bytes()) {
+        if !master.variants.is_empty() {
+            // 选择最高带宽的流进行二次验证
+            let best = master.variants.iter().max_by_key(|v| v.bandwidth)
+                .ok_or_else(|| DownloadError::parse("主播放列表无可用流".to_string()))?;
+            let sub_url = resolve_url(&Url::parse(url).map_err(|e| DownloadError::parse(format!("URL解析失败: {e}")))?, &best.uri)?;
+            
+            let sub_resp = client.get(&sub_url).send().await
+                .map_err(|e| DownloadError::http(0, format!("请求子M3U8失败: {e}")))?;
+            if !sub_resp.status().is_success() {
+                return Err(DownloadError::http(sub_resp.status().as_u16(), sub_url));
+            }
+            let sub_content = sub_resp.text().await
+                .map_err(|e| DownloadError::parse(format!("读取子M3U8失败: {e}")))?;
+            m3u8_rs::parse_media_playlist(sub_content.as_bytes())
+                .map_err(|e| DownloadError::parse(format!("M3U8解析失败: {e:?}")))?;
+            return Ok(());
+        }
+    }
+
+    // 尝试直接解析为媒体播放列表
+    m3u8_rs::parse_media_playlist(content.as_bytes())
+        .map_err(|e| DownloadError::parse(format!("M3U8解析失败: {e:?}")))?;
+    Ok(())
+}
