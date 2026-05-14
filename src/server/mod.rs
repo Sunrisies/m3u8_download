@@ -45,13 +45,16 @@ pub async fn start_server(host: &str, port: u16) -> Result<()> {
         log::warn!("加载数据失败: {e}");
     }
 
-    let app = create_router(state);
+    let app = create_router(state.clone());
 
     let addr = format!("{host}:{port}");
     log::info!("🚀 服务器启动在 http://{addr}");
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     axum::serve(listener, app).await?;
+    if let Err(e) = state.flush_pending_save().await {
+        log::warn!("服务关闭前保存任务数据失败: {e}");
+    }
 
     Ok(())
 }

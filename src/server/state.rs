@@ -2,12 +2,16 @@ use crate::error::Result;
 use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tokio::time::{Duration, sleep};
 use uuid::Uuid;
 
-use crate::config::{DEFAULT_CONCURRENT_DOWNLOADS, DEFAULT_RETRY_COUNT, HTTP_TIMEOUT_SECONDS};
+use crate::config::{
+    DEFAULT_CONCURRENT_DOWNLOADS, DEFAULT_RETRY_COUNT, HTTP_TIMEOUT_SECONDS, TASK_SAVE_DEBOUNCE_MS,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
@@ -74,6 +78,8 @@ pub struct AppState {
     pub settings: Arc<RwLock<AppSettings>>,
     pub settings_file: PathBuf,
     pub data_file: PathBuf,
+    pub tasks_dirty: Arc<AtomicBool>,
+    pub save_scheduled: Arc<AtomicBool>,
 }
 
 impl AppState {
@@ -83,6 +89,8 @@ impl AppState {
             settings: Arc::new(RwLock::new(AppSettings::default())),
             settings_file,
             data_file,
+            tasks_dirty: Arc::new(AtomicBool::new(false)),
+            save_scheduled: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -121,6 +129,52 @@ impl AppState {
         }
 
         tokio::fs::write(&self.data_file, tasks_content).await?;
+        self.tasks_dirty.store(false, Ordering::SeqCst);
+        Ok(())
+    }
+
+    pub fn schedule_save(&self) {
+        self.tasks_dirty.store(true, Ordering::SeqCst);
+
+        if self
+            .save_scheduled
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return;
+        }
+
+        let state = self.clone();
+        tokio::spawn(async move {
+            loop {
+                sleep(Duration::from_millis(TASK_SAVE_DEBOUNCE_MS)).await;
+
+                if !state.tasks_dirty.swap(false, Ordering::SeqCst) {
+                    state.save_scheduled.store(false, Ordering::SeqCst);
+                    if state.tasks_dirty.load(Ordering::SeqCst)
+                        && state
+                            .save_scheduled
+                            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                            .is_ok()
+                    {
+                        continue;
+                    }
+                    break;
+                }
+
+                if let Err(e) = state.save().await {
+                    log::error!("任务持久化失败: {e}");
+                    state.tasks_dirty.store(true, Ordering::SeqCst);
+                }
+            }
+        });
+    }
+
+    pub async fn flush_pending_save(&self) -> Result<()> {
+        if self.tasks_dirty.load(Ordering::SeqCst) || self.save_scheduled.load(Ordering::SeqCst) {
+            self.save().await?;
+            self.save_scheduled.store(false, Ordering::SeqCst);
+        }
         Ok(())
     }
 
@@ -168,7 +222,7 @@ impl AppState {
             tasks.insert(id.clone(), task);
         }
 
-        self.save().await?;
+        self.schedule_save();
         Ok(id)
     }
 
@@ -186,7 +240,7 @@ impl AppState {
                 task.updated_at = Local::now();
             }
         }
-        self.save().await?;
+        self.schedule_save();
         Ok(())
     }
 
@@ -216,7 +270,7 @@ impl AppState {
                 task.updated_at = Local::now();
             }
         }
-        self.save().await?;
+        self.schedule_save();
         Ok(())
     }
 
@@ -250,7 +304,7 @@ impl AppState {
             tasks.remove(id).is_some()
         };
         if removed {
-            self.save().await?;
+            self.schedule_save();
         }
         Ok(removed)
     }

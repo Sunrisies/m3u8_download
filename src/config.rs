@@ -28,6 +28,9 @@ pub const WRITE_BUFFER_SIZE: usize = 64 * 1024; // 64KB
 /// WebSocket更新间隔（毫秒）
 pub const WS_UPDATE_INTERVAL_MS: u64 = 500;
 
+/// 任务持久化防抖间隔（毫秒）
+pub const TASK_SAVE_DEBOUNCE_MS: u64 = 300;
+
 /// TS文件同步字节
 pub const TS_SYNC_BYTE: u8 = 0x47;
 
