@@ -1,8 +1,12 @@
-mod encryption;
+﻿mod encryption;
 mod segment;
 pub use encryption::{decrypt_segment, extract_encryption_key};
+use crate::validation;
+pub use segment::{merge_segments, merge_segments_to_temp_ts, merge_to_mp4_stream};
 use futures::{StreamExt, stream};
-pub use segment::merge_segments;
+
+
+
 
 use std::path::{Path, PathBuf};
 
@@ -12,8 +16,9 @@ use tokio::{fs, time::Instant};
 
 use crate::config::DEFAULT_RETRY_COUNT;
 use crate::error::{DownloadError, Result};
-use crate::utils::{DownloadTask, download_segment::M3u8Downloader, is_already_downloaded};
-use crate::validation;
+pub use crate::utils::download_segment::M3u8Downloader;
+
+use crate::utils::{DownloadTask, is_already_downloaded};
 
 #[derive(Parser)]
 pub struct Args {

@@ -207,6 +207,41 @@
         };
     };
 
+
+    // ========== 直传进度弹窗（不确定进度，旋转动画） ==========
+    const createStreamProgressModal = (taskName) => {
+        const modal = document.createElement('div');
+        modal.id = `stream-progress-${Date.now()}`;
+        Object.assign(modal.style, {
+            position: 'fixed', top: 0, left: 0, width: '100%', height: '100%',
+            backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center',
+            justifyContent: 'center', zIndex: '10002', fontFamily: 'sans-serif'
+        });
+        modal.onclick = e => { if (e.target === modal) { modal.remove(); } };
+        modal.innerHTML = `<div style="background:#fff;border-radius:12px;padding:32px 40px;text-align:center;box-shadow:0 4px 30px rgba(0,0,0,0.2);min-width:260px">
+            <div class="stream-spinner" style="width:48px;height:48px;border:5px solid #e0e0e0;border-top-color:#4caf50;border-radius:50%;animation:stream-spin 0.8s linear infinite;margin:0 auto 16px"></div>
+            <div style="font-size:15px;color:#333;margin-bottom:8px;font-weight:bold">⏳ 正在直传下载...</div>
+            <div style="font-size:12px;color:#888">服务端正在拉取视频流，请稍候</div>
+            <div style="font-size:11px;color:#aaa;margin-top:8px;word-break:break-all">${taskName}</div>
+        </div>`;
+        if (!document.getElementById('stream-spin-style')) {
+            const style = document.createElement('style');
+            style.id = 'stream-spin-style';
+            style.textContent = '@keyframes stream-spin { to { transform: rotate(360deg); } }';
+            document.head.appendChild(style);
+        }
+        document.body.appendChild(modal);
+        return {
+            complete: (type) => {
+                modal.remove();
+                showNotification(`${taskName} 下载完成`, 'success');
+            },
+            fail: (err) => {
+                modal.remove();
+                showNotification(`直传失败: ${err}`, 'error');
+            }
+        };
+    };
     const monitorTask = async (taskId, taskName, url) => {
         const ui = createProgressModal(taskId, taskName, url);
         let ws, heartbeat, completed = false;
@@ -246,7 +281,23 @@
         modal.onclick = e => { if (e.target === modal) modal.remove(); };
         const panel = document.createElement('div');
         Object.assign(panel.style, { backgroundColor: '#fff', borderRadius: '8px', width: '80%', maxWidth: '800px', maxHeight: '80%', display: 'flex', flexDirection: 'column', boxShadow: '0 4px 20px rgba(0,0,0,0.3)', overflow: 'hidden' });
-        panel.innerHTML = `<div style="padding:12px 20px;border-bottom:1px solid #e0e0e0;display:flex;justify-content:space-between;align-items:center;background:#f5f5f5"><h3 style="margin:0">📺 m3u8 链接 (${links.length})</h3><button class="close-modal" style="background:none;border:none;font-size:20px;cursor:pointer;color:#666">✖</button></div><button id="copy-all" style="margin:0 20px 12px 20px;padding:6px 12px;background:#4caf50;color:white;border:none;border-radius:4px;cursor:pointer;font-size:14px;align-self:flex-start">📋 复制全部链接</button><div style="flex:1;overflow-y:auto;padding:16px 20px"><ul style="margin:0;padding-left:20px;list-style:decimal" id="link-list"></ul></div>`;
+        panel.innerHTML = `<div style="padding:12px 20px;border-bottom:1px solid #e0e0e0;display:flex;justify-content:space-between;align-items:center;background:#f5f5f5"><h3 style="margin:0">📺 m3u8 链接 (${links.length})</h3><button class="close-modal" style="background:none;border:none;font-size:20px;cursor:pointer;color:#666">✖</button></div><label id="stream-label" style="display:flex;align-items:center;gap:6px;margin:8px 20px;padding:4px 8px;font-size:13px;color:#555;cursor:pointer;border-radius:4px;transition:all 0.2s"><input type="checkbox" id="stream-mode"> 直传模式（不占服务端空间）</label><button id="copy-all" style="margin:0 20px 12px 20px;padding:6px 12px;background:#4caf50;color:white;border:none;border-radius:4px;cursor:pointer;font-size:14px;align-self:flex-start">📋 复制全部链接</button><div style="flex:1;overflow-y:auto;padding:16px 20px"><ul style="margin:0;padding-left:20px;list-style:decimal" id="link-list"></ul></div>`;
+        // 直传模式复选框高亮
+        const streamCb = document.getElementById('stream-mode');
+        const streamLabel = document.getElementById('stream-label');
+        if (streamCb && streamLabel) {
+            streamCb.addEventListener('change', () => {
+                if (streamCb.checked) {
+                    streamLabel.style.backgroundColor = '#e8f5e9';
+                    streamLabel.style.border = '1px solid #4caf50';
+                    streamLabel.style.fontWeight = 'bold';
+                } else {
+                    streamLabel.style.backgroundColor = '';
+                    streamLabel.style.border = '';
+                    streamLabel.style.fontWeight = '';
+                }
+            });
+        }
         const listContainer = panel.querySelector('#link-list');
         links.forEach(link => {
             const li = document.createElement('li');
@@ -259,10 +310,33 @@
                 e.stopPropagation();
                 let fileName = await showFileNameDialog(link);
                 if (!fileName) return;
-                try {
-                    let taskId = await startDownload(link, `${fileName}_${Date.now()}`);
-                    monitorTask(taskId, fileName, link);
-                } catch (err) { showNotification(`启动下载失败: ${err}`, 'error'); }
+                if (document.getElementById('stream-mode')?.checked) {
+                    modal.remove();
+                    const streamProgress = createStreamProgressModal(fileName);
+                    GM_xmlhttpRequest({
+                        method: 'POST', url: `${BACKEND_URL}/api/download/stream`,
+                        headers: { 'Content-Type': 'application/json' },
+                        responseType: 'blob',
+                        data: JSON.stringify({ url: link, name: fileName, output_dir: null }),
+                        onload: function(r) {
+                            if (r.status === 200) {
+                                const blob = new Blob([r.response], { type: r.response.type || 'video/mp4' });
+                                const url = URL.createObjectURL(blob);
+                                const a = document.createElement('a');
+                                a.href = url; a.download = `${fileName}.mp4`; a.style.display = 'none';
+                                document.body.appendChild(a); a.click();
+                                setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 1000);
+                                streamProgress.complete('success');
+                            } else { streamProgress.fail('服务器返回: ' + r.status); }
+                        },
+                        onerror: function() { streamProgress.fail('网络错误'); }
+                    });
+                } else {
+                    try {
+                        let taskId = await startDownload(link, `${fileName}_${Date.now()}`);
+                        monitorTask(taskId, fileName, link);
+                    } catch (err) { showNotification(`启动下载失败: ${err}`, 'error'); }
+                }
             };
             li.appendChild(span);
             listContainer.appendChild(li);

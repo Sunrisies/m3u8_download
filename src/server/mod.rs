@@ -1,4 +1,4 @@
-mod handlers;
+﻿mod handlers;
 pub mod state;
 
 use axum::{
@@ -18,12 +18,14 @@ pub fn create_router(state: AppState) -> Router {
         .route("/settings.html", get(handlers::settings_page))
         .route("/api/download", post(handlers::start_download))
         .route("/api/tasks", get(handlers::get_all_tasks))
+        .route("/api/download/stream", post(handlers::stream_download))
         .route("/api/tasks/stats", get(handlers::get_stats))
         .route("/api/tasks/pending", get(handlers::get_pending_tasks))
         .route("/api/tasks/completed", get(handlers::get_completed_tasks))
         .route("/api/tasks/failed", get(handlers::get_failed_tasks))
         .route("/api/tasks/:id", get(handlers::get_task))
         .route("/api/tasks/:id", delete(handlers::delete_task))
+        .route("/api/tasks/:id/download", get(handlers::download_task_file))
         .route("/api/tasks/:id/ws", get(handlers::websocket_handler))
         .route("/api/settings", get(handlers::get_settings))
         .route("/api/settings", put(handlers::update_settings))

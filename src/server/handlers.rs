@@ -1,4 +1,4 @@
-use axum::{
+﻿use axum::{
     Json,
     extract::{
         Path as AxumPath, Query, State, WebSocketUpgrade,
@@ -14,6 +14,14 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::{env::current_dir, path::Path};
 use tokio::time::interval;
+
+use futures::stream;
+use uuid::Uuid;
+use tokio::sync::mpsc;
+use bytes::Bytes;
+
+use crate::downloader::M3u8Downloader;
+use crate::downloader::Args as DownloadArgs;
 
 use crate::config::WS_UPDATE_INTERVAL_MS;
 use crate::server::state::{AppSettings, AppState, DownloadRequest, TaskStatus};
@@ -264,6 +272,48 @@ pub async fn delete_task(
     }
 }
 
+pub async fn download_task_file(
+    AxumPath(id): AxumPath<String>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    match state.get_task(&id).await {
+        Some(task_info) => {
+            match &task_info.output_file {
+                Some(output_path) => {
+                    let path = std::path::Path::new(output_path);
+                    if path.exists() {
+                        match tokio::fs::read(path).await {
+                            Ok(data) => {
+                                let filename = path.file_name()
+.and_then(|n| n.to_str())
+.unwrap_or("download.mp4");
+                                let content_type = mime_guess::from_path(path).first_or_octet_stream();
+                                Response::builder()
+.header("Content-Type", content_type.as_ref())
+.header("Content-Disposition", format!("attachment; filename=\"{}\"", filename))
+.header("Content-Length", data.len().to_string())
+.body(axum::body::Body::from(data))
+.unwrap()
+                            }
+                            Err(e) => {
+                                (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("读取文件失败: {}", e)}))).into_response()
+                            }
+                        }
+                    } else {
+                        (StatusCode::NOT_FOUND, Json(json!({"error": "文件不存在"}))).into_response()
+                    }
+                }
+                None => {
+                    (StatusCode::BAD_REQUEST, Json(json!({"error": "任务尚未完成，无输出文件"}))).into_response()
+                }
+            }
+        }
+        None => {
+            (StatusCode::NOT_FOUND, Json(json!({"error": "任务不存在"}))).into_response()
+        }
+    }
+}
+
 pub async fn get_pending_tasks(State(state): State<AppState>) -> impl IntoResponse {
     let tasks = state.get_tasks_by_status(TaskStatus::Pending).await;
     Json(tasks)
@@ -478,4 +528,64 @@ pub async fn browse_directories(Query(query): Query<BrowseQuery>) -> impl IntoRe
         "parent_path": parent_path,
         "entries": entries
     }))
+}
+
+pub async fn stream_download(
+    State(state): State<AppState>,
+    Json(request): Json<DownloadRequest>,
+) -> impl IntoResponse {
+    let settings = state.get_settings().await;
+    let temp_id = Uuid::new_v4().to_string();
+    let download_dir = format!("./temp/stream_{}", temp_id);
+    let output_dir = format!("./temp/stream_{}_out", temp_id);
+
+    // 创建临时目录
+    if let Err(e) = tokio::fs::create_dir_all(&download_dir).await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("创建临时目录失败: {}", e)}))).into_response();
+    }
+    if let Err(e) = tokio::fs::create_dir_all(&output_dir).await {
+        let _ = std::fs::remove_dir_all(&download_dir);
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("创建输出目录失败: {}", e)}))).into_response();
+    }
+
+    let (tx, rx) = mpsc::channel::<std::result::Result<Bytes, String>>(32);
+
+    let args = DownloadArgs {
+        url: request.url.clone(),
+        output_name: request.name.clone(),
+        concurrent: settings.concurrent,
+        retry: settings.retry,
+        download_dir: download_dir.clone(),
+        output_dir: output_dir.clone(),
+        index: 1,
+    };
+
+    let dl_dir = download_dir.clone();
+    let download_args = args;
+    match M3u8Downloader::new(download_args) {
+        Ok(downloader) => {
+            tokio::spawn(async move {
+                let downloader = downloader.with_stream_output(tx);
+                let _ = downloader.download().await;
+                let _ = std::fs::remove_dir_all(&dl_dir);
+                let _ = std::fs::remove_dir_all(&output_dir);
+            });
+
+            let stream = stream::unfold(rx, |mut rx| async {
+                rx.recv().await.map(|item| (item, rx))
+            });
+
+            let filename = format!("{}.mp4", request.name);
+            Response::builder()
+                .header("Content-Type", "video/mp4")
+                .header("Content-Disposition", format!("attachment; filename=\"{}\"", filename))
+                .body(axum::body::Body::from_stream(stream))
+                .unwrap()
+        }
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&download_dir);
+            let _ = std::fs::remove_dir_all(&output_dir);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("创建下载器失败: {}", e)}))).into_response()
+        }
+    }
 }

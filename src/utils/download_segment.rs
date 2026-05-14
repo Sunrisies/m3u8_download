@@ -1,4 +1,4 @@
-use crate::config::{
+﻿use crate::config::{
     HTTP_CONNECT_TIMEOUT_SECONDS, HTTP_TIMEOUT_SECONDS, POOL_IDLE_TIMEOUT_SECONDS,
     POOL_MAX_IDLE_PER_HOST, TCP_KEEPALIVE_SECONDS, WRITE_BUFFER_SIZE,
 };
@@ -7,6 +7,8 @@ use crate::downloader::{
     process_download_tasks,
 };
 use crate::error::{DownloadError, Result};
+use bytes::Bytes;
+use tokio::sync::mpsc;
 use crate::validation;
 use futures::future::join_all;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -49,6 +51,7 @@ pub struct M3u8Downloader {
     pub index: usize,
     pub progress_callback: Option<ProgressCallback>,
     pub status_callback: Option<StatusCallback>,
+    pub stream_output: Option<mpsc::Sender<std::result::Result<Bytes, String>>>,
     pub current_base_url: Arc<tokio::sync::Mutex<Url>>,
 }
 
@@ -124,6 +127,7 @@ impl M3u8Downloader {
             index,
             progress_callback: None,
             status_callback: None,
+            stream_output: None,
             current_base_url: Arc::new(tokio::sync::Mutex::new(base_url)),
         })
     }
@@ -135,6 +139,11 @@ impl M3u8Downloader {
 
     pub fn with_status_callback(mut self, callback: StatusCallback) -> Self {
         self.status_callback = Some(callback);
+        self
+    }
+
+    pub fn with_stream_output(mut self, tx: mpsc::Sender<std::result::Result<Bytes, String>>) -> Self {
+        self.stream_output = Some(tx);
         self
     }
 
@@ -424,20 +433,29 @@ impl M3u8Downloader {
     }
 
     async fn merge_segments(&self, segments: &[m3u8_rs::MediaSegment]) -> Result<()> {
-        let output_path = self
-            .output_dir
-            .join(format!("{}.mp4", self.output_filename));
-        merge_segments(&self.download_dir, segments, &output_path).await?;
-
-        // 清理下载目录
-        if let Err(e) = std::fs::remove_dir_all(&self.download_dir) {
-            error!("删除下载目录失败 {}: {}", self.download_dir.display(), e);
+        if let Some(tx) = &self.stream_output {
+            // 流式模式：通过ffmpeg pipe输出
+            let temp_ts_path = self.download_dir.join("temp.ts");
+            crate::downloader::merge_segments_to_temp_ts(&self.download_dir, segments, &temp_ts_path).await?;
+            crate::downloader::merge_to_mp4_stream(&temp_ts_path, tx).await?;
+            // 清理
+            let _ = std::fs::remove_dir_all(&self.download_dir);
+            info!("流式输出完成，已清理临时文件");
+            Ok(())
         } else {
-            info!("已删除下载目录: {}", self.download_dir.display());
+            let output_path = self
+                .output_dir
+                .join(format!("{}.mp4", self.output_filename));
+            merge_segments(&self.download_dir, segments, &output_path).await?;
+            // 清理下载目录
+            if let Err(e) = std::fs::remove_dir_all(&self.download_dir) {
+                error!("删除下载目录失败 {}: {}", self.download_dir.display(), e);
+            } else {
+                info!("已删除下载目录: {}", self.download_dir.display());
+            }
+            info!("视频文件已转换为MP4: {}", output_path.display());
+            Ok(())
         }
-
-        info!("视频文件已转换为MP4: {}", output_path.display());
-        Ok(())
     }
 
     fn parse_m3u8(content: &str) -> Result<MediaPlaylist> {
@@ -460,6 +478,7 @@ impl M3u8Downloader {
             index: self.index,
             progress_callback: self.progress_callback.clone(),
             status_callback: self.status_callback.clone(),
+            stream_output: self.stream_output.clone(),
             current_base_url: self.current_base_url.clone(),
         }
     }

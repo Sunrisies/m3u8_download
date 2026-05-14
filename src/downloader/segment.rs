@@ -1,4 +1,4 @@
-use crate::config::WRITE_BUFFER_SIZE;
+﻿use crate::config::WRITE_BUFFER_SIZE;
 use crate::error::{DownloadError, Result};
 use crate::utils::get_segment_filename;
 use std::path::Path;
@@ -71,6 +71,97 @@ pub async fn merge_segments(
 
     // 清理临时文件
     let _ = fs::remove_file(&temp_ts_path).await;
+
+    Ok(())
+}
+
+/// 合并所有TS片段到临时文件
+pub async fn merge_segments_to_temp_ts(
+    download_dir: &Path,
+    segments: &[m3u8_rs::MediaSegment],
+    temp_ts_path: &Path,
+) -> Result<()> {
+    let temp_file = fs::File::create(temp_ts_path)
+        .await
+        .map_err(|e| DownloadError::file(temp_ts_path, e.to_string()))?;
+    let mut writer = tokio::io::BufWriter::with_capacity(WRITE_BUFFER_SIZE, temp_file);
+
+    for (index, segment) in segments.iter().enumerate() {
+        let segment_filename = get_segment_filename(&segment.uri, index);
+        let segment_path = download_dir.join(&segment_filename);
+
+        if !segment_path.exists() {
+            return Err(DownloadError::file(
+                &segment_path,
+                format!("片段文件不存在: {}", segment_path.display()),
+            ));
+        }
+
+        let mut segment_file = fs::File::open(&segment_path)
+            .await
+            .map_err(|e| DownloadError::file(&segment_path, e.to_string()))?;
+        let mut buffer = Vec::new();
+        segment_file
+            .read_to_end(&mut buffer)
+            .await
+            .map_err(|e| DownloadError::file(&segment_path, e.to_string()))?;
+        writer
+            .write_all(&buffer)
+            .await
+            .map_err(|e| DownloadError::file(temp_ts_path, e.to_string()))?;
+    }
+
+    writer
+        .flush()
+        .await
+        .map_err(|e| DownloadError::file(temp_ts_path, e.to_string()))?;
+
+    Ok(())
+}
+
+/// 通过ffmpeg pipe将TS转为MP4并流式输出
+pub async fn merge_to_mp4_stream(
+    temp_ts_path: &Path,
+    tx: &tokio::sync::mpsc::Sender<std::result::Result<bytes::Bytes, String>>,
+) -> Result<()> {
+    use std::process::Stdio;
+    use tokio::io::AsyncReadExt;
+    use tokio::process::Command;
+
+    let mut child = Command::new("ffmpeg")
+        .args([
+            "-i",
+            temp_ts_path.to_str().unwrap(),
+            "-c",
+            "copy",
+            "-bsf:a",
+            "aac_adtstoasc",
+            "-f",
+            "mp4",
+            "pipe:1",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| DownloadError::ffmpeg(format!("启动FFmpeg失败: {e}")))?;
+
+    let mut stdout = child.stdout.take()
+        .ok_or_else(|| DownloadError::ffmpeg("无法获取FFmpeg标准输出".to_string()))?;
+    let mut buf = vec![0u8; 65536];
+
+    loop {
+        let n = stdout.read(&mut buf).await
+            .map_err(|e| DownloadError::ffmpeg(format!("读取FFmpeg输出失败: {e}")))?;
+        if n == 0 { break; }
+        let _ = tx.send(Ok(bytes::Bytes::copy_from_slice(&buf[..n]))).await;
+    }
+
+    let status = child.wait().await
+        .map_err(|e| DownloadError::ffmpeg(format!("等待FFmpeg失败: {e}")))?;
+
+    if !status.success() {
+        return Err(DownloadError::ffmpeg("FFmpeg转换失败".to_string()));
+    }
 
     Ok(())
 }
