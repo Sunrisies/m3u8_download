@@ -1,12 +1,15 @@
 // ==UserScript==
 // @name         M3U8 下载助手（精简版）
 // @namespace    http://tampermonkey.net/
-// @version      3.2
-// @description  拦截 m3u8，自定义文件名，下载进度实时显示
+// @version      3.3
+// @description  拦截 m3u8，直传下载，自定义文件名，下载进度实时显示
 // @match        *://*/*
 // @run-at       document-start
 // @grant        unsafeWindow
 // @grant        GM_xmlhttpRequest
+// @grant        GM_download
+// @connect      localhost
+// @connect      127.0.0.1
 // ==/UserScript==
 
 (function () {
@@ -112,6 +115,31 @@
             return sanitize(decodeURIComponent(last)) || 'video';
         } catch (e) { return 'm3u8_video'; }
     };
+    const normalizeStatus = (status) => String(status || '').trim().toLowerCase();
+    const formatBytes = (bytes) => {
+        if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+        const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        let value = bytes;
+        let index = 0;
+        while (value >= 1024 && index < units.length - 1) {
+            value /= 1024;
+            index += 1;
+        }
+        return `${value.toFixed(value >= 100 || index === 0 ? 0 : 1)} ${units[index]}`;
+    };
+    const parseResponseError = (resp, fallback) => {
+        try {
+            const data = JSON.parse(resp.responseText || '{}');
+            return data.error || data.message || fallback;
+        } catch (e) {
+            return fallback;
+        }
+    };
+    const parseDownloadError = (err) => {
+        if (!err) return '未知错误';
+        if (typeof err === 'string') return err;
+        return err.error || err.details || err.message || JSON.stringify(err);
+    };
 
     const showNotification = (msg, type = 'success') => {
         let n = document.getElementById('tm-notification');
@@ -155,8 +183,48 @@
         GM_xmlhttpRequest({
             method: 'POST', url: `${BACKEND_URL}/api/download`, headers: { 'Content-Type': 'application/json' },
             data: JSON.stringify({ url, name, output_dir: null }),
-            onload: resp => { if (resp.status === 200 || resp.status === 201) try { resolve(JSON.parse(resp.responseText).id); } catch (e) { reject('解析失败'); } else reject(`状态码 ${resp.status}`); },
+            onload: resp => {
+                if (resp.status === 200 || resp.status === 201) {
+                    try { resolve(JSON.parse(resp.responseText).id); } catch (e) { reject('解析失败'); }
+                } else reject(parseResponseError(resp, `状态码 ${resp.status}`));
+            },
             onerror: err => reject(`网络错误: ${err}`)
+        });
+    });
+
+    const initDirectDownload = (url, name) => new Promise((resolve, reject) => {
+        GM_xmlhttpRequest({
+            method: 'POST',
+            url: `${BACKEND_URL}/api/download/stream/init`,
+            headers: { 'Content-Type': 'application/json' },
+            data: JSON.stringify({ url, name, output_dir: null }),
+            onload: resp => {
+                if (resp.status === 200 || resp.status === 201) {
+                    try {
+                        const data = JSON.parse(resp.responseText);
+                        if (!data.id) reject('未返回任务 ID');
+                        else resolve(data);
+                    } catch (e) {
+                        reject('解析失败');
+                    }
+                } else {
+                    reject(parseResponseError(resp, `状态码 ${resp.status}`));
+                }
+            },
+            onerror: err => reject(`网络错误: ${err}`)
+        });
+    });
+
+    const triggerDirectDownload = (taskId, fileName, hooks = {}) => new Promise((resolve, reject) => {
+        GM_download({
+            url: `${BACKEND_URL}/api/download/stream/${encodeURIComponent(taskId)}`,
+            name: `${fileName}.mp4`,
+            saveAs: false,
+            onprogress: e => {
+                if (hooks.onprogress) hooks.onprogress(e.loaded || 0, e.lengthComputable ? e.total : 0);
+            },
+            onload: () => resolve(),
+            onerror: err => reject(parseDownloadError(err))
         });
     });
 
@@ -165,12 +233,13 @@
         const modal = document.createElement('div');
         modal.id = `download-progress-${taskId}`;
         Object.assign(modal.style, { position: 'fixed', top: '80px', right: '20px', width: '320px', backgroundColor: '#fff', borderRadius: '8px', boxShadow: '0 4px 20px rgba(0,0,0,0.3)', zIndex: '10001', fontFamily: 'sans-serif', transition: 'all 0.2s ease', overflow: 'hidden' });
-        modal.innerHTML = `<div class="full-view"><div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;background:#f5f5f5;border-bottom:1px solid #e0e0e0"><h3 style="margin:0;font-size:14px;font-weight:bold;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:180px">📥 ${taskName}</h3><div style="display:flex;gap:8px"><button class="minimize" style="background:none;border:none;font-size:18px;cursor:pointer;color:#666" title="最小化">−</button><button class="close" style="background:none;border:none;font-size:18px;cursor:pointer;color:#666" title="关闭">✖</button></div></div><div style="padding:16px;border-bottom:1px solid #f0f0f0"><div style="width:100%;background:#f0f0f0;border-radius:4px;overflow:hidden;margin-bottom:8px"><div class="progress-bar" style="width:0%;height:24px;background:#4caf50;text-align:center;line-height:24px;color:white;font-size:12px">0%</div></div><div class="status-text" style="font-size:12px;color:#666">状态：等待开始...</div></div><div style="padding:0 16px 16px 16px;font-size:10px;color:#999;word-break:break-all">${url}</div></div><div class="mini-view" style="display:none;width:50px;height:50px;border-radius:50%;background:#4caf50;cursor:pointer;align-items:center;justify-content:center;text-align:center;color:white;font-size:16px;font-weight:bold;box-shadow:0 2px 8px rgba(0,0,0,0.2)">0%</div>`;
+        modal.innerHTML = `<div class="full-view"><div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;background:#f5f5f5;border-bottom:1px solid #e0e0e0"><h3 style="margin:0;font-size:14px;font-weight:bold;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:180px">📥 ${taskName}</h3><div style="display:flex;gap:8px"><button class="minimize" style="background:none;border:none;font-size:18px;cursor:pointer;color:#666" title="最小化">−</button><button class="close" style="background:none;border:none;font-size:18px;cursor:pointer;color:#666" title="关闭">✖</button></div></div><div style="padding:16px;border-bottom:1px solid #f0f0f0"><div style="width:100%;background:#f0f0f0;border-radius:4px;overflow:hidden;margin-bottom:8px"><div class="progress-bar" style="width:0%;height:24px;background:#4caf50;text-align:center;line-height:24px;color:white;font-size:12px">0%</div></div><div class="status-text" style="font-size:12px;color:#666">状态：等待开始...</div><div class="download-text" style="font-size:11px;color:#888;margin-top:6px">浏览器下载：等待开始...</div></div><div style="padding:0 16px 16px 16px;font-size:10px;color:#999;word-break:break-all">${url}</div></div><div class="mini-view" style="display:none;width:50px;height:50px;border-radius:50%;background:#4caf50;cursor:pointer;align-items:center;justify-content:center;text-align:center;color:white;font-size:16px;font-weight:bold;box-shadow:0 2px 8px rgba(0,0,0,0.2)">0%</div>`;
         document.body.appendChild(modal);
         const fullView = modal.querySelector('.full-view');
         const miniView = modal.querySelector('.mini-view');
         const progressBar = modal.querySelector('.progress-bar');
         const statusDiv = modal.querySelector('.status-text');
+        const downloadDiv = modal.querySelector('.download-text');
         const minimizeBtn = modal.querySelector('.minimize');
         const closeBtn = modal.querySelector('.close');
         let isMinimized = false;
@@ -198,57 +267,38 @@
                 progressBar.style.backgroundColor = bg;
             },
             updateStatus: (status, err = '') => {
+                status = normalizeStatus(status);
                 if (status === 'downloading') statusDiv.textContent = '状态：下载中...';
+                else if (status === 'merging') statusDiv.textContent = '状态：合并并直传中...';
                 else if (status === 'completed') { statusDiv.textContent = '✅ 下载完成！'; progressBar.style.backgroundColor = '#4caf50'; miniView.style.backgroundColor = '#4caf50'; miniView.textContent = '✓'; }
                 else if (status === 'failed') { statusDiv.textContent = `❌ 下载失败: ${err || '未知错误'}`; progressBar.style.backgroundColor = '#f44336'; miniView.style.backgroundColor = '#f44336'; miniView.textContent = '✗'; }
                 else if (status === 'pending') statusDiv.textContent = '状态：等待中...';
+            },
+            updateDownloadState: (text, color = '#888') => {
+                if (downloadDiv) {
+                    downloadDiv.textContent = `浏览器下载：${text}`;
+                    downloadDiv.style.color = color;
+                }
             },
             close: () => modal.remove()
         };
     };
 
-
-    // ========== 直传进度弹窗（不确定进度，旋转动画） ==========
-    const createStreamProgressModal = (taskName) => {
-        const modal = document.createElement('div');
-        modal.id = `stream-progress-${Date.now()}`;
-        Object.assign(modal.style, {
-            position: 'fixed', top: 0, left: 0, width: '100%', height: '100%',
-            backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center',
-            justifyContent: 'center', zIndex: '10002', fontFamily: 'sans-serif'
-        });
-        modal.onclick = e => { if (e.target === modal) { modal.remove(); } };
-        modal.innerHTML = `<div style="background:#fff;border-radius:12px;padding:32px 40px;text-align:center;box-shadow:0 4px 30px rgba(0,0,0,0.2);min-width:260px">
-            <div class="stream-spinner" style="width:48px;height:48px;border:5px solid #e0e0e0;border-top-color:#4caf50;border-radius:50%;animation:stream-spin 0.8s linear infinite;margin:0 auto 16px"></div>
-            <div style="font-size:15px;color:#333;margin-bottom:8px;font-weight:bold">⏳ 正在直传下载...</div>
-            <div style="font-size:12px;color:#888">服务端正在拉取视频流，请稍候</div>
-            <div style="font-size:11px;color:#aaa;margin-top:8px;word-break:break-all">${taskName}</div>
-        </div>`;
-        if (!document.getElementById('stream-spin-style')) {
-            const style = document.createElement('style');
-            style.id = 'stream-spin-style';
-            style.textContent = '@keyframes stream-spin { to { transform: rotate(360deg); } }';
-            document.head.appendChild(style);
-        }
-        document.body.appendChild(modal);
-        return {
-            complete: (type) => {
-                modal.remove();
-                showNotification(`${taskName} 下载完成`, 'success');
-            },
-            fail: (err) => {
-                modal.remove();
-                showNotification(`直传失败: ${err}`, 'error');
-            }
-        };
-    };
-    const monitorTask = async (taskId, taskName, url) => {
+    const monitorTask = async (taskId, taskName, url, opts = {}) => {
         const ui = createProgressModal(taskId, taskName, url);
         let ws, heartbeat, completed = false;
+        let downloadDone = !opts.expectBrowserDownload;
+        let taskDone = false;
+        let taskFailed = false;
+        let fallbackTimer = null;
+        const tryFinalize = () => {
+            if (!completed && taskDone && downloadDone) finalize(true);
+        };
         const finalize = (success, err = '') => {
             if (completed) return;
             completed = true;
             clearTimeout(heartbeat); clearInterval(heartbeat);
+            clearTimeout(fallbackTimer);
             if (ws && ws.readyState === WebSocket.OPEN) ws.close();
             ui.close();
             showNotification(`${taskName} ${success ? '下载完成' : '下载失败' + (err ? ': ' + err : '')}`, success ? 'success' : 'error');
@@ -261,15 +311,48 @@
                     let task = JSON.parse(e.data);
                     if (task.progress !== undefined) ui.updateProgress(task.progress);
                     if (task.status) ui.updateStatus(task.status, task.error);
-                    if (task.progress >= 99.99 && !completed) finalize(true);
-                    else if (task.status === 'completed' && !completed) finalize(true);
-                    else if (task.status === 'failed' && !completed) finalize(false, task.error);
+                    const status = normalizeStatus(task.status);
+                    if (status === 'completed') {
+                        taskDone = true;
+                        tryFinalize();
+                    } else if (status === 'failed') {
+                        taskFailed = true;
+                        finalize(false, task.error);
+                    }
                 } catch (e) { }
             };
-            ws.onerror = () => { if (!completed) finalize(false, 'WebSocket错误'); };
-            ws.onclose = () => { if (!completed) finalize(false, '连接中断'); };
+            ws.onerror = () => { if (!completed && !taskDone && !taskFailed) finalize(false, 'WebSocket错误'); };
+            ws.onclose = () => {
+                if (completed || taskDone || taskFailed) return;
+                fallbackTimer = setTimeout(() => {
+                    if (!completed && !taskDone && !taskFailed) finalize(false, '连接中断');
+                }, 1500);
+            };
         };
         connect();
+        if (opts.expectBrowserDownload) {
+            ui.updateDownloadState('准备启动...', '#666');
+        }
+        return {
+            markBrowserDownloadStarted: () => ui.updateDownloadState('已开始', '#666'),
+            markBrowserDownloadProgress: (loaded, total) => {
+                if (!total || total <= 0) {
+                    ui.updateDownloadState(`已接收 ${formatBytes(loaded)}`, '#666');
+                    return;
+                }
+                const pct = Math.min(100, Math.max(0, loaded / total * 100));
+                ui.updateDownloadState(`${pct.toFixed(1)}% (${formatBytes(loaded)} / ${formatBytes(total)})`, '#666');
+            },
+            markBrowserDownloadCompleted: () => {
+                downloadDone = true;
+                ui.updateDownloadState('已保存到浏览器下载目录', '#4caf50');
+                tryFinalize();
+            },
+            markBrowserDownloadFailed: (err) => {
+                ui.updateDownloadState(`失败: ${err || '未知错误'}`, '#f44336');
+                finalize(false, err || '浏览器下载失败');
+            }
+        };
     };
 
     const showLinksModal = (links) => {
@@ -281,23 +364,7 @@
         modal.onclick = e => { if (e.target === modal) modal.remove(); };
         const panel = document.createElement('div');
         Object.assign(panel.style, { backgroundColor: '#fff', borderRadius: '8px', width: '80%', maxWidth: '800px', maxHeight: '80%', display: 'flex', flexDirection: 'column', boxShadow: '0 4px 20px rgba(0,0,0,0.3)', overflow: 'hidden' });
-        panel.innerHTML = `<div style="padding:12px 20px;border-bottom:1px solid #e0e0e0;display:flex;justify-content:space-between;align-items:center;background:#f5f5f5"><h3 style="margin:0">📺 m3u8 链接 (${links.length})</h3><button class="close-modal" style="background:none;border:none;font-size:20px;cursor:pointer;color:#666">✖</button></div><label id="stream-label" style="display:flex;align-items:center;gap:6px;margin:8px 20px;padding:4px 8px;font-size:13px;color:#555;cursor:pointer;border-radius:4px;transition:all 0.2s"><input type="checkbox" id="stream-mode"> 直传模式（不占服务端空间）</label><button id="copy-all" style="margin:0 20px 12px 20px;padding:6px 12px;background:#4caf50;color:white;border:none;border-radius:4px;cursor:pointer;font-size:14px;align-self:flex-start">📋 复制全部链接</button><div style="flex:1;overflow-y:auto;padding:16px 20px"><ul style="margin:0;padding-left:20px;list-style:decimal" id="link-list"></ul></div>`;
-        // 直传模式复选框高亮
-        const streamCb = document.getElementById('stream-mode');
-        const streamLabel = document.getElementById('stream-label');
-        if (streamCb && streamLabel) {
-            streamCb.addEventListener('change', () => {
-                if (streamCb.checked) {
-                    streamLabel.style.backgroundColor = '#e8f5e9';
-                    streamLabel.style.border = '1px solid #4caf50';
-                    streamLabel.style.fontWeight = 'bold';
-                } else {
-                    streamLabel.style.backgroundColor = '';
-                    streamLabel.style.border = '';
-                    streamLabel.style.fontWeight = '';
-                }
-            });
-        }
+        panel.innerHTML = `<div style="padding:12px 20px;border-bottom:1px solid #e0e0e0;display:flex;justify-content:space-between;align-items:center;background:#f5f5f5"><h3 style="margin:0">📺 m3u8 链接 (${links.length})</h3><button class="close-modal" style="background:none;border:none;font-size:20px;cursor:pointer;color:#666">✖</button></div><button id="copy-all" style="margin:0 20px 12px 20px;padding:6px 12px;background:#4caf50;color:white;border:none;border-radius:4px;cursor:pointer;font-size:14px;align-self:flex-start">📋 复制全部链接</button><div style="flex:1;overflow-y:auto;padding:16px 20px"><ul style="margin:0;padding-left:20px;list-style:decimal" id="link-list"></ul></div>`;
         const listContainer = panel.querySelector('#link-list');
         links.forEach(link => {
             const li = document.createElement('li');
@@ -310,33 +377,17 @@
                 e.stopPropagation();
                 let fileName = await showFileNameDialog(link);
                 if (!fileName) return;
-                if (document.getElementById('stream-mode')?.checked) {
-                    modal.remove();
-                    const streamProgress = createStreamProgressModal(fileName);
-                    GM_xmlhttpRequest({
-                        method: 'POST', url: `${BACKEND_URL}/api/download/stream`,
-                        headers: { 'Content-Type': 'application/json' },
-                        responseType: 'blob',
-                        data: JSON.stringify({ url: link, name: fileName, output_dir: null }),
-                        onload: function(r) {
-                            if (r.status === 200) {
-                                const blob = new Blob([r.response], { type: r.response.type || 'video/mp4' });
-                                const url = URL.createObjectURL(blob);
-                                const a = document.createElement('a');
-                                a.href = url; a.download = `${fileName}.mp4`; a.style.display = 'none';
-                                document.body.appendChild(a); a.click();
-                                setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 1000);
-                                streamProgress.complete('success');
-                            } else { streamProgress.fail('服务器返回: ' + r.status); }
-                        },
-                        onerror: function() { streamProgress.fail('网络错误'); }
-                    });
-                } else {
-                    try {
-                        let taskId = await startDownload(link, `${fileName}_${Date.now()}`);
-                        monitorTask(taskId, fileName, link);
-                    } catch (err) { showNotification(`启动下载失败: ${err}`, 'error'); }
-                }
+                try {
+                    const taskName = `${fileName}_${Date.now()}`;
+                    const task = await initDirectDownload(link, taskName);
+                    const monitor = await monitorTask(task.id, fileName, link, { expectBrowserDownload: true });
+                    monitor.markBrowserDownloadStarted();
+                    triggerDirectDownload(task.id, fileName, {
+                        onprogress: (loaded, total) => monitor.markBrowserDownloadProgress(loaded, total)
+                    })
+                        .then(() => monitor.markBrowserDownloadCompleted())
+                        .catch(err => monitor.markBrowserDownloadFailed(err));
+                } catch (err) { showNotification(`启动下载失败: ${err}`, 'error'); }
             };
             li.appendChild(span);
             listContainer.appendChild(li);

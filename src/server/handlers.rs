@@ -16,7 +16,6 @@ use std::{env::current_dir, path::Path};
 use tokio::time::interval;
 
 use futures::stream;
-use uuid::Uuid;
 use tokio::sync::mpsc;
 use bytes::Bytes;
 
@@ -113,6 +112,70 @@ pub async fn start_download(
     }
 }
 
+pub async fn init_stream_download(
+    State(state): State<AppState>,
+    Json(request): Json<DownloadRequest>,
+) -> impl IntoResponse {
+    match state.add_task(request).await {
+        Ok(task_id) => (
+            StatusCode::CREATED,
+            Json(json!({
+                "id": task_id,
+                "status": "pending",
+                "download_url": format!("/api/download/stream/{}", task_id),
+                "message": "直传下载任务已创建"
+            })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "error": format!("创建直传任务失败: {}", e)
+            })),
+        )
+            .into_response(),
+    }
+}
+
+fn create_task_callbacks(
+    state: &AppState,
+    task_id: &str,
+) -> (
+    crate::utils::download_segment::ProgressCallback,
+    crate::utils::download_segment::StatusCallback,
+) {
+    let state_clone = state.clone();
+    let task_id_clone = task_id.to_string();
+    let callback: crate::utils::download_segment::ProgressCallback =
+        Arc::new(move |progress: f64| {
+            let state = state_clone.clone();
+            let task_id = task_id_clone.clone();
+            let normalized_progress = progress.clamp(0.0, 99.0);
+            tokio::spawn(async move {
+                let _ = state.update_task_progress(&task_id, normalized_progress).await;
+            });
+        });
+
+    let state_clone2 = state.clone();
+    let task_id_clone2 = task_id.to_string();
+    let status_callback: crate::utils::download_segment::StatusCallback =
+        Arc::new(move |status: &str| {
+            let state = state_clone2.clone();
+            let task_id = task_id_clone2.clone();
+            let status = status.to_ascii_lowercase();
+            tokio::spawn(async move {
+                if status == "merging" {
+                    let _ = state.update_task_progress(&task_id, 99.0).await;
+                    let _ = state
+                        .update_task_status(&task_id, TaskStatus::Merging, None)
+                        .await;
+                }
+            });
+        });
+
+    (callback, status_callback)
+}
+
 async fn run_download_task(
     state: AppState,
     task_id: String,
@@ -156,34 +219,7 @@ async fn run_download_task(
         index: 1,
     };
 
-    // 创建进度回调
-    let state_clone = state.clone();
-    let task_id_clone = task_id.clone();
-    let callback: crate::utils::download_segment::ProgressCallback =
-        Arc::new(move |progress: f64| {
-            let state = state_clone.clone();
-            let task_id = task_id_clone.clone();
-            tokio::spawn(async move {
-                let _ = state.update_task_progress(&task_id, progress).await;
-            });
-        });
-
-    // 创建状态回调
-    let state_clone2 = state.clone();
-    let task_id_clone2 = task_id.clone();
-    let status_callback: crate::utils::download_segment::StatusCallback =
-        Arc::new(move |status: &str| {
-            let state = state_clone2.clone();
-            let task_id = task_id_clone2.clone();
-            let status = status.to_string();
-            tokio::spawn(async move {
-                if status.as_str() == "merging" {
-                    let _ = state
-                        .update_task_status(&task_id, TaskStatus::Merging, None)
-                        .await;
-                }
-            });
-        });
+    let (callback, status_callback) = create_task_callbacks(&state, &task_id);
 
     match crate::utils::download_segment::M3u8Downloader::new(args) {
         Ok(downloader) => {
@@ -224,6 +260,139 @@ async fn run_download_task(
     }
 
     Ok(())
+}
+
+async fn build_stream_download_response(
+    state: AppState,
+    task_id: String,
+    request: DownloadRequest,
+) -> Response {
+    let settings = state.get_settings().await;
+    let download_dir = format!("{}/stream_{}", settings.temp_dir, task_id);
+    let output_dir = format!("{}/stream_{}_out", settings.temp_dir, task_id);
+
+    let _ = state
+        .update_task_status(&task_id, TaskStatus::Downloading, None)
+        .await;
+
+    if let Err(e) = tokio::fs::create_dir_all(&download_dir).await {
+        let message = format!("创建临时目录失败: {}", e);
+        let _ = state
+            .update_task_status(&task_id, TaskStatus::Failed, Some(message.clone()))
+            .await;
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": message })),
+        )
+            .into_response();
+    }
+
+    if let Err(e) = tokio::fs::create_dir_all(&output_dir).await {
+        let message = format!("创建输出目录失败: {}", e);
+        let _ = std::fs::remove_dir_all(&download_dir);
+        let _ = state
+            .update_task_status(&task_id, TaskStatus::Failed, Some(message.clone()))
+            .await;
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": message })),
+        )
+            .into_response();
+    }
+
+    if let Err(e) = quick_validate_m3u8(&request.url).await {
+        let message = format!("M3U8验证失败: {}", e);
+        let _ = std::fs::remove_dir_all(&download_dir);
+        let _ = std::fs::remove_dir_all(&output_dir);
+        let _ = state
+            .update_task_status(&task_id, TaskStatus::Failed, Some(message.clone()))
+            .await;
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": message }))).into_response();
+    }
+
+    let (tx, rx) = mpsc::channel::<std::result::Result<Bytes, String>>(32);
+
+    let args = DownloadArgs {
+        url: request.url.clone(),
+        output_name: request.name.clone(),
+        concurrent: settings.concurrent,
+        retry: settings.retry,
+        download_dir: download_dir.clone(),
+        output_dir: output_dir.clone(),
+        index: 1,
+    };
+
+    let (callback, status_callback) = create_task_callbacks(&state, &task_id);
+
+    match M3u8Downloader::new(args) {
+        Ok(downloader) => {
+            let state_clone = state.clone();
+            let task_id_clone = task_id.clone();
+            let download_dir_clone = download_dir.clone();
+            let output_dir_clone = output_dir.clone();
+            let error_tx = tx.clone();
+
+            tokio::spawn(async move {
+                let downloader = downloader
+                    .with_progress_callback(callback)
+                    .with_status_callback(status_callback)
+                    .with_stream_output(tx);
+
+                match downloader.download().await {
+                    Ok(()) => {
+                        let _ = state_clone.update_task_progress(&task_id_clone, 100.0).await;
+                        let _ = state_clone
+                            .update_task_status(&task_id_clone, TaskStatus::Completed, None)
+                            .await;
+                        log::info!("✅ 直传任务 {task_id_clone} 下载完成");
+                    }
+                    Err(e) => {
+                        let message = e.to_string();
+                        let _ = state_clone
+                            .update_task_status(
+                                &task_id_clone,
+                                TaskStatus::Failed,
+                                Some(message.clone()),
+                            )
+                            .await;
+                        let _ = error_tx.send(Err(message.clone())).await;
+                        log::error!("❌ 直传任务 {task_id_clone} 下载失败: {message}");
+                    }
+                }
+
+                let _ = std::fs::remove_dir_all(&download_dir_clone);
+                let _ = std::fs::remove_dir_all(&output_dir_clone);
+            });
+
+            let stream = stream::unfold(rx, |mut rx| async {
+                rx.recv().await.map(|item| (item, rx))
+            });
+
+            let filename = format!("{}.mp4", request.name);
+            Response::builder()
+                .header("Content-Type", "video/mp4")
+                .header(
+                    "Content-Disposition",
+                    format!("attachment; filename=\"{}\"", filename),
+                )
+                .header("X-Task-Id", &task_id)
+                .body(axum::body::Body::from_stream(stream))
+                .unwrap()
+        }
+        Err(e) => {
+            let message = format!("创建下载器失败: {}", e);
+            let _ = std::fs::remove_dir_all(&download_dir);
+            let _ = std::fs::remove_dir_all(&output_dir);
+            let _ = state
+                .update_task_status(&task_id, TaskStatus::Failed, Some(message.clone()))
+                .await;
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": message })),
+            )
+                .into_response()
+        }
+    }
 }
 
 pub async fn get_all_tasks(
@@ -313,6 +482,42 @@ pub async fn download_task_file(
             (StatusCode::NOT_FOUND, Json(json!({"error": "任务不存在"}))).into_response()
         }
     }
+}
+
+pub async fn stream_download_by_task(
+    AxumPath(id): AxumPath<String>,
+    State(state): State<AppState>,
+) -> Response {
+    let task = match state.get_task(&id).await {
+        Some(task) => task,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({
+                    "error": "任务不存在"
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    if task.status != TaskStatus::Pending {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": "直传任务已启动或已结束，请重新创建任务"
+            })),
+        )
+            .into_response();
+    }
+
+    let request = DownloadRequest {
+        name: task.name,
+        url: task.url,
+        output_dir: None,
+    };
+
+    build_stream_download_response(state, id, request).await
 }
 
 pub async fn get_pending_tasks(State(state): State<AppState>) -> impl IntoResponse {
@@ -535,66 +740,15 @@ pub async fn stream_download(
     State(state): State<AppState>,
     Json(request): Json<DownloadRequest>,
 ) -> impl IntoResponse {
-    let settings = state.get_settings().await;
-    let temp_id = Uuid::new_v4().to_string();
-    let download_dir = format!("./temp/stream_{}", temp_id);
-    let output_dir = format!("./temp/stream_{}_out", temp_id);
-
-    // 创建临时目录
-    if let Err(e) = tokio::fs::create_dir_all(&download_dir).await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("创建临时目录失败: {}", e)}))).into_response();
-    }
-    if let Err(e) = tokio::fs::create_dir_all(&output_dir).await {
-        let _ = std::fs::remove_dir_all(&download_dir);
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("创建输出目录失败: {}", e)}))).into_response();
-    }
-
-    // 预先验证M3U8是否可解析
-    if let Err(e) = quick_validate_m3u8(&request.url).await {
-        let _ = std::fs::remove_dir_all(&download_dir);
-        let _ = std::fs::remove_dir_all(&output_dir);
-        return (StatusCode::BAD_REQUEST, Json(json!({"error": format!("M3U8验证失败: {}", e)}))).into_response();
-    }
-
-    let (tx, rx) = mpsc::channel::<std::result::Result<Bytes, String>>(32);
-
-    let args = DownloadArgs {
-        url: request.url.clone(),
-        output_name: request.name.clone(),
-        concurrent: settings.concurrent,
-        retry: settings.retry,
-        download_dir: download_dir.clone(),
-        output_dir: output_dir.clone(),
-        index: 1,
-    };
-
-    let dl_dir = download_dir.clone();
-    let download_args = args;
-    match M3u8Downloader::new(download_args) {
-        Ok(downloader) => {
-            tokio::spawn(async move {
-                let downloader = downloader.with_stream_output(tx);
-                let _ = downloader.download().await;
-                let _ = std::fs::remove_dir_all(&dl_dir);
-                let _ = std::fs::remove_dir_all(&output_dir);
-            });
-
-            let stream = stream::unfold(rx, |mut rx| async {
-                rx.recv().await.map(|item| (item, rx))
-            });
-
-            let filename = format!("{}.mp4", request.name);
-            Response::builder()
-                .header("Content-Type", "video/mp4")
-                .header("Content-Disposition", format!("attachment; filename=\"{}\"", filename))
-                .body(axum::body::Body::from_stream(stream))
-                .unwrap()
-        }
-        Err(e) => {
-            let _ = std::fs::remove_dir_all(&download_dir);
-            let _ = std::fs::remove_dir_all(&output_dir);
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("创建下载器失败: {}", e)}))).into_response()
-        }
+    match state.add_task(request.clone()).await {
+        Ok(task_id) => build_stream_download_response(state, task_id, request).await,
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "error": format!("创建直传任务失败: {}", e)
+            })),
+        )
+            .into_response(),
     }
 }
 

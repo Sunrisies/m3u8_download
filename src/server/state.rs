@@ -34,10 +34,15 @@ impl Default for AppSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum TaskStatus {
+    #[serde(rename = "pending", alias = "Pending")]
     Pending,
+    #[serde(rename = "downloading", alias = "Downloading")]
     Downloading,
+    #[serde(rename = "merging", alias = "Merging")]
     Merging,
+    #[serde(rename = "completed", alias = "Completed")]
     Completed,
+    #[serde(rename = "failed", alias = "Failed")]
     Failed,
 }
 

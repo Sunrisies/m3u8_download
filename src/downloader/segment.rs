@@ -130,37 +130,62 @@ pub async fn merge_to_mp4_stream(
 
     let mut child = Command::new("ffmpeg")
         .args([
+            "-nostdin",
             "-i",
             temp_ts_path.to_str().unwrap(),
             "-c",
             "copy",
             "-bsf:a",
             "aac_adtstoasc",
+            "-movflags",
+            "frag_keyframe+empty_moov+default_base_moof",
             "-f",
             "mp4",
             "pipe:1",
         ])
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| DownloadError::ffmpeg(format!("启动FFmpeg失败: {e}")))?;
 
-    let mut stdout = child.stdout.take()
+    let mut stdout = child
+        .stdout
+        .take()
         .ok_or_else(|| DownloadError::ffmpeg("无法获取FFmpeg标准输出".to_string()))?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| DownloadError::ffmpeg("无法获取FFmpeg标准错误输出".to_string()))?;
     let mut buf = vec![0u8; 65536];
+    let stderr_task = tokio::spawn(async move {
+        let mut stderr_buf = Vec::new();
+        let _ = stderr.read_to_end(&mut stderr_buf).await;
+        stderr_buf
+    });
 
     loop {
-        let n = stdout.read(&mut buf).await
+        let n = stdout
+            .read(&mut buf)
+            .await
             .map_err(|e| DownloadError::ffmpeg(format!("读取FFmpeg输出失败: {e}")))?;
-        if n == 0 { break; }
+        if n == 0 {
+            break;
+        }
         let _ = tx.send(Ok(bytes::Bytes::copy_from_slice(&buf[..n]))).await;
     }
 
-    let status = child.wait().await
+    let status = child
+        .wait()
+        .await
         .map_err(|e| DownloadError::ffmpeg(format!("等待FFmpeg失败: {e}")))?;
+    let stderr_output = stderr_task.await.unwrap_or_default();
 
     if !status.success() {
-        return Err(DownloadError::ffmpeg("FFmpeg转换失败".to_string()));
+        let stderr_text = String::from_utf8_lossy(&stderr_output).trim().to_string();
+        if stderr_text.is_empty() {
+            return Err(DownloadError::ffmpeg("FFmpeg转换失败".to_string()));
+        }
+        return Err(DownloadError::ffmpeg(format!("FFmpeg转换失败: {stderr_text}")));
     }
 
     Ok(())
