@@ -21,7 +21,6 @@ use bytes::Bytes;
 
 use crate::downloader::M3u8Downloader;
 use crate::downloader::Args as DownloadArgs;
-use crate::utils::download_segment::quick_validate_m3u8;
 
 use crate::config::WS_UPDATE_INTERVAL_MS;
 use crate::server::state::{AppSettings, AppState, DownloadRequest, TaskStatus};
@@ -117,16 +116,19 @@ pub async fn init_stream_download(
     Json(request): Json<DownloadRequest>,
 ) -> impl IntoResponse {
     match state.add_task(request).await {
-        Ok(task_id) => (
-            StatusCode::CREATED,
-            Json(json!({
-                "id": task_id,
-                "status": "pending",
-                "download_url": format!("/api/download/stream/{}", task_id),
-                "message": "直传下载任务已创建"
-            })),
-        )
-            .into_response(),
+        Ok(task_id) => {
+            log::info!("📝 直传任务已创建: {task_id}");
+            (
+                StatusCode::CREATED,
+                Json(json!({
+                    "id": task_id,
+                    "status": "pending",
+                    "download_url": format!("/api/download/stream/{}", task_id),
+                    "message": "直传下载任务已创建"
+                })),
+            )
+                .into_response()
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({
@@ -267,6 +269,7 @@ async fn build_stream_download_response(
     task_id: String,
     request: DownloadRequest,
 ) -> Response {
+    log::info!("🚀 直传任务开始响应: {task_id}");
     let settings = state.get_settings().await;
     let download_dir = format!("{}/stream_{}", settings.temp_dir, task_id);
     let output_dir = format!("{}/stream_{}_out", settings.temp_dir, task_id);
@@ -300,16 +303,6 @@ async fn build_stream_download_response(
             .into_response();
     }
 
-    if let Err(e) = quick_validate_m3u8(&request.url).await {
-        let message = format!("M3U8验证失败: {}", e);
-        let _ = std::fs::remove_dir_all(&download_dir);
-        let _ = std::fs::remove_dir_all(&output_dir);
-        let _ = state
-            .update_task_status(&task_id, TaskStatus::Failed, Some(message.clone()))
-            .await;
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": message }))).into_response();
-    }
-
     let (tx, rx) = mpsc::channel::<std::result::Result<Bytes, String>>(32);
 
     let args = DownloadArgs {
@@ -333,6 +326,7 @@ async fn build_stream_download_response(
             let error_tx = tx.clone();
 
             tokio::spawn(async move {
+                log::info!("▶️ 直传任务开始后台下载: {task_id_clone}");
                 let downloader = downloader
                     .with_progress_callback(callback)
                     .with_status_callback(status_callback)

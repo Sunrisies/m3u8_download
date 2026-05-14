@@ -15,11 +15,14 @@ use indicatif::{ProgressBar, ProgressStyle};
 use log::{error, info};
 use m3u8_rs::{MediaPlaylist, MediaSegment};
 use reqwest::Client;
+use std::collections::BTreeMap;
 use std::fs::{self};
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::process::Command;
 use tokio::time::sleep;
 use url::Url;
 // AES解密相关
@@ -221,8 +224,17 @@ impl M3u8Downloader {
             info!("检测到加密流，已获取密钥");
         }
 
-        // 并行下载片段
         let segments = Arc::new(playlist.segments);
+
+        if self.stream_output.is_some() {
+            info!("开始直传模式下载片段...{}", segments.len());
+            self.stream_segments_to_mp4(segments, key_data).await?;
+            self.notify_status("completed");
+            info!("直传下载完成");
+            return Ok(());
+        }
+
+        // 并行下载片段
         let semaphore = Arc::new(tokio::sync::Semaphore::new(self.concurrent));
         info!("开始下载片段...{}", segments.len());
         let download_tasks: Vec<_> = (0..segments.len())
@@ -269,6 +281,181 @@ impl M3u8Downloader {
         Ok(())
     }
 
+    async fn stream_segments_to_mp4(
+        &self,
+        segments: Arc<Vec<MediaSegment>>,
+        key_data: Option<Vec<u8>>,
+    ) -> Result<()> {
+        let tx = self
+            .stream_output
+            .as_ref()
+            .ok_or_else(|| DownloadError::Unknown("直传输出通道不存在".to_string()))?
+            .clone();
+
+        let mut child = Command::new("ffmpeg")
+            .args([
+                "-nostdin",
+                "-f",
+                "mpegts",
+                "-i",
+                "pipe:0",
+                "-c",
+                "copy",
+                "-bsf:a",
+                "aac_adtstoasc",
+                "-movflags",
+                "frag_keyframe+empty_moov+default_base_moof",
+                "-f",
+                "mp4",
+                "pipe:1",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| DownloadError::ffmpeg(format!("启动FFmpeg失败: {e}")))?;
+
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| DownloadError::ffmpeg("无法获取FFmpeg标准输入".to_string()))?;
+        let mut stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| DownloadError::ffmpeg("无法获取FFmpeg标准输出".to_string()))?;
+        let mut stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| DownloadError::ffmpeg("无法获取FFmpeg标准错误输出".to_string()))?;
+
+        let stdout_tx = tx.clone();
+        let stdout_task = tokio::spawn(async move {
+            let mut buf = vec![0u8; 65536];
+            loop {
+                let n = stdout
+                    .read(&mut buf)
+                    .await
+                    .map_err(|e| DownloadError::ffmpeg(format!("读取FFmpeg输出失败: {e}")))?;
+                if n == 0 {
+                    break;
+                }
+                if stdout_tx
+                    .send(Ok(Bytes::copy_from_slice(&buf[..n])))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+            Ok::<(), DownloadError>(())
+        });
+
+        let stderr_task = tokio::spawn(async move {
+            let mut stderr_buf = Vec::new();
+            let _ = stderr.read_to_end(&mut stderr_buf).await;
+            stderr_buf
+        });
+
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(self.concurrent));
+        let (segment_tx, mut segment_rx) =
+            mpsc::channel::<(usize, Result<Vec<u8>>)>(self.concurrent.saturating_mul(2).max(4));
+        let mut handles = Vec::with_capacity(segments.len());
+
+        for index in 0..segments.len() {
+            let downloader = self.clone();
+            let segments = segments.clone();
+            let key_data = key_data.clone();
+            let semaphore = semaphore.clone();
+            let segment_tx = segment_tx.clone();
+
+            handles.push(tokio::spawn(async move {
+                let _permit = semaphore.acquire_owned().await.unwrap();
+                let result = downloader
+                    .download_segment_bytes(index, &segments[index], key_data.as_ref())
+                    .await;
+                let _ = segment_tx.send((index, result)).await;
+            }));
+        }
+        drop(segment_tx);
+
+        let mut buffer = BTreeMap::new();
+        let mut next_index = 0usize;
+        let mut stream_error: Option<DownloadError> = None;
+
+        while let Some((index, result)) = segment_rx.recv().await {
+            match result {
+                Ok(data) => {
+                    buffer.insert(index, data);
+                    while let Some(segment_data) = buffer.remove(&next_index) {
+                        stdin
+                            .write_all(&segment_data)
+                            .await
+                            .map_err(|e| DownloadError::ffmpeg(format!("写入FFmpeg失败: {e}")))?;
+                        next_index += 1;
+                    }
+                }
+                Err(e) => {
+                    stream_error = Some(e);
+                    break;
+                }
+            }
+        }
+
+        if stream_error.is_some() {
+            for handle in &handles {
+                handle.abort();
+            }
+        }
+
+        for handle in handles {
+            match handle.await {
+                Ok(()) => {}
+                Err(e) if e.is_cancelled() => {}
+                Err(e) => {
+                    if stream_error.is_none() {
+                        stream_error =
+                            Some(DownloadError::task("直传下载任务", format!("下载任务异常: {e}")));
+                    }
+                }
+            }
+        }
+
+        if let Some(err) = stream_error {
+            let _ = child.kill().await;
+            let _ = stdout_task.await;
+            let _ = stderr_task.await;
+            return Err(err);
+        }
+
+        stdin
+            .flush()
+            .await
+            .map_err(|e| DownloadError::ffmpeg(format!("刷新FFmpeg输入失败: {e}")))?;
+        drop(stdin);
+
+        self.notify_status("merging");
+
+        let status = child
+            .wait()
+            .await
+            .map_err(|e| DownloadError::ffmpeg(format!("等待FFmpeg失败: {e}")))?;
+        let stdout_result = stdout_task
+            .await
+            .map_err(|e| DownloadError::ffmpeg(format!("读取FFmpeg输出任务失败: {e}")))?;
+        stdout_result?;
+        let stderr_output = stderr_task.await.unwrap_or_default();
+
+        if !status.success() {
+            let stderr_text = String::from_utf8_lossy(&stderr_output).trim().to_string();
+            if stderr_text.is_empty() {
+                return Err(DownloadError::ffmpeg("FFmpeg转换失败".to_string()));
+            }
+            return Err(DownloadError::ffmpeg(format!("FFmpeg转换失败: {stderr_text}")));
+        }
+
+        Ok(())
+    }
+
     async fn download_text(&self, url: &str) -> Result<String> {
         let full_url = resolve_url(&self.base_url, url)?;
         let response = self
@@ -299,36 +486,7 @@ impl M3u8Downloader {
         loop {
             match self.try_download_segment(index, segment, key).await {
                 Ok(()) => {
-                    // 更新统计信息
-                    {
-                        // 1. 在锁内更新计数器并读取所需数据
-                        let (completed, total, speed, percentage) = {
-                            let mut stats = self.stats.lock().await;
-                            stats.completed_segments += 1;
-                            let completed = stats.completed_segments;
-                            let total = stats.total_segments;
-                            let speed = stats.get_speed();
-                            let percentage = stats.get_progress_percentage();
-                            drop(stats); // 显式提前释放
-                            (completed, total, speed, percentage)
-                        }; // 锁在这里释放
-                        // 2. 更新进度条（不持有锁）
-                        self.progress_bar.set_position(completed as u64);
-                        self.progress_bar.set_message(format!(
-                            "这个是第{}个任务,名称是:{} 已下载: {}/{} ({:.1}%) 速度: {:.1} KB/s",
-                            self.index,
-                            self.output_filename,
-                            completed,
-                            total,
-                            percentage,
-                            speed / 1024.0
-                        ));
-
-                        // 3. 调用进度回调
-                        if let Some(callback) = &self.progress_callback {
-                            callback(percentage);
-                        }
-                    }
+                    self.record_segment_completion().await;
                     return Ok(());
                 }
                 Err(e) => {
@@ -348,6 +506,106 @@ impl M3u8Downloader {
                 }
             }
         }
+    }
+
+    async fn download_segment_bytes(
+        &self,
+        index: usize,
+        segment: &MediaSegment,
+        key: Option<&Vec<u8>>,
+    ) -> Result<Vec<u8>> {
+        let mut retry_count = 0;
+
+        loop {
+            match self.try_fetch_segment_data(index, segment, key).await {
+                Ok(data) => {
+                    self.record_segment_completion().await;
+                    return Ok(data);
+                }
+                Err(e) => {
+                    retry_count += 1;
+                    if retry_count > self.retry {
+                        return Err(DownloadError::segment(index, self.retry, e.to_string()));
+                    }
+                    error!(
+                        "片段 {index} 下载失败，正在重试 ({retry_count}/{})...",
+                        self.retry
+                    );
+                    let delay_ms = 1000 * (1 << (retry_count - 1));
+                    let delay_u64 =
+                        u64::try_from(delay_ms).expect("delay_ms should be non-negative");
+                    sleep(Duration::from_millis(delay_u64)).await;
+                }
+            }
+        }
+    }
+
+    async fn record_segment_completion(&self) {
+        let (completed, total, speed, percentage) = {
+            let mut stats = self.stats.lock().await;
+            stats.completed_segments += 1;
+            let completed = stats.completed_segments;
+            let total = stats.total_segments;
+            let speed = stats.get_speed();
+            let percentage = stats.get_progress_percentage();
+            (completed, total, speed, percentage)
+        };
+
+        self.progress_bar.set_position(completed as u64);
+        self.progress_bar.set_message(format!(
+            "这个是第{}个任务,名称是:{} 已下载: {}/{} ({:.1}%) 速度: {:.1} KB/s",
+            self.index,
+            self.output_filename,
+            completed,
+            total,
+            percentage,
+            speed / 1024.0
+        ));
+
+        if let Some(callback) = &self.progress_callback {
+            callback(percentage);
+        }
+    }
+
+    async fn try_fetch_segment_data(
+        &self,
+        index: usize,
+        segment: &MediaSegment,
+        key: Option<&Vec<u8>>,
+    ) -> Result<Vec<u8>> {
+        let current_url = {
+            let url = self.current_base_url.lock().await;
+            url.clone()
+        };
+
+        let segment_url = resolve_url(&current_url, &segment.uri)?;
+        let response = self
+            .client
+            .get(&segment_url)
+            .send()
+            .await
+            .map_err(|e| DownloadError::http(0, format!("请求失败: {e}")))?;
+
+        if !response.status().is_success() {
+            return Err(DownloadError::http(response.status().as_u16(), segment_url));
+        }
+
+        let mut data = response
+            .bytes()
+            .await
+            .map_err(|e| DownloadError::parse(format!("读取响应体失败: {e}")))?
+            .to_vec();
+
+        {
+            let mut stats = self.stats.lock().await;
+            stats.downloaded_bytes += data.len() as u64;
+        }
+
+        if let Some(key_data) = key {
+            data = decrypt_segment(&data, key_data, index)?;
+        }
+
+        Ok(data)
     }
 
     async fn try_download_segment(
@@ -378,41 +636,7 @@ impl M3u8Downloader {
             }
         }
 
-        // 获取当前base_url
-        let current_url = {
-            let url = self.current_base_url.lock().await;
-            url.clone()
-        };
-
-        let segment_url = resolve_url(&current_url, &segment.uri)?;
-        // info!("正在下载片段 {}: {}", index, segment_url);
-        let response = self
-            .client
-            .get(&segment_url)
-            .send()
-            .await
-            .map_err(|e| DownloadError::http(0, format!("请求失败: {e}")))?;
-
-        if !response.status().is_success() {
-            return Err(DownloadError::http(response.status().as_u16(), segment_url));
-        }
-
-        let mut data = response
-            .bytes()
-            .await
-            .map_err(|e| DownloadError::parse(format!("读取响应体失败: {e}")))?
-            .to_vec();
-
-        // 更新下载字节数
-        {
-            let mut stats = self.stats.lock().await;
-            stats.downloaded_bytes += data.len() as u64;
-        }
-
-        // 如果有加密，进行解密
-        if let Some(key_data) = key {
-            data = decrypt_segment(&data, key_data, index)?;
-        }
+        let data = self.try_fetch_segment_data(index, segment, key).await?;
 
         // 保存到下载目录
         let file = tokio::fs::File::create(&segment_path)
@@ -482,57 +706,4 @@ impl M3u8Downloader {
             current_base_url: self.current_base_url.clone(),
         }
     }
-}
-
-/// 快速验证M3U8 URL是否可访问和解析
-pub async fn quick_validate_m3u8(url: &str) -> Result<()> {
-    use crate::config::{HTTP_TIMEOUT_SECONDS, HTTP_CONNECT_TIMEOUT_SECONDS};
-    
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(HTTP_TIMEOUT_SECONDS))
-        .connect_timeout(Duration::from_secs(HTTP_CONNECT_TIMEOUT_SECONDS))
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-        .build()
-        .map_err(|e| DownloadError::parse(format!("创建HTTP客户端失败: {e}")))?;
-
-    let response = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| DownloadError::http(0, format!("请求M3U8失败: {e}")))?;
-
-    if !response.status().is_success() {
-        return Err(DownloadError::http(response.status().as_u16(), url.to_string()));
-    }
-
-    let content = response
-        .text()
-        .await
-        .map_err(|e| DownloadError::parse(format!("读取M3U8响应失败: {e}")))?;
-
-    // 尝试解析为主播放列表
-    if let Ok((_, master)) = m3u8_rs::parse_master_playlist(content.as_bytes()) {
-        if !master.variants.is_empty() {
-            // 选择最高带宽的流进行二次验证
-            let best = master.variants.iter().max_by_key(|v| v.bandwidth)
-                .ok_or_else(|| DownloadError::parse("主播放列表无可用流".to_string()))?;
-            let sub_url = resolve_url(&Url::parse(url).map_err(|e| DownloadError::parse(format!("URL解析失败: {e}")))?, &best.uri)?;
-            
-            let sub_resp = client.get(&sub_url).send().await
-                .map_err(|e| DownloadError::http(0, format!("请求子M3U8失败: {e}")))?;
-            if !sub_resp.status().is_success() {
-                return Err(DownloadError::http(sub_resp.status().as_u16(), sub_url));
-            }
-            let sub_content = sub_resp.text().await
-                .map_err(|e| DownloadError::parse(format!("读取子M3U8失败: {e}")))?;
-            m3u8_rs::parse_media_playlist(sub_content.as_bytes())
-                .map_err(|e| DownloadError::parse(format!("M3U8解析失败: {e:?}")))?;
-            return Ok(());
-        }
-    }
-
-    // 尝试直接解析为媒体播放列表
-    m3u8_rs::parse_media_playlist(content.as_bytes())
-        .map_err(|e| DownloadError::parse(format!("M3U8解析失败: {e:?}")))?;
-    Ok(())
 }
