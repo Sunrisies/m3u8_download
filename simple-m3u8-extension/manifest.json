@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "Simple M3U8 Finder",
+  "version": "0.1.0",
+  "description": "Capture m3u8 requests on the current page and show them in a simple panel.",
+  "permissions": [
+    "webRequest",
+    "tabs",
+    "storage",
+    "clipboardWrite",
+    "downloads"
+  ],
+  "host_permissions": [
+    "<all_urls>",
+    "http://localhost:8080/*",
+    "http://127.0.0.1:8080/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "Simple M3U8 Finder"
+  }
+}

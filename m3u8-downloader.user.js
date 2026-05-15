@@ -1,27 +1,29 @@
 // ==UserScript==
 // @name         M3U8 下载助手（精简版）
 // @namespace    http://tampermonkey.net/
-// @version      3.3
+// @version      3.4
 // @description  拦截 m3u8，直传下载，自定义文件名，下载进度实时显示
 // @match        *://*/*
 // @run-at       document-start
 // @grant        unsafeWindow
 // @grant        GM_xmlhttpRequest
 // @grant        GM_download
-// @connect      localhost
+// @grant        GM_setClipboard
+// @connect      192.168.1.28
 // @connect      127.0.0.1
 // ==/UserScript==
 
 (function () {
     'use strict';
-    const BACKEND_URL = 'http://localhost:8080';
+    const BACKEND_URL = 'http://192.168.1.28:8080';
     const realWin = unsafeWindow;
+    const isFirefox = /\bFirefox\//.test(navigator.userAgent);
 
     if (realWin.__m3u8InterceptorInstalled) return;
     realWin.__m3u8InterceptorInstalled = true;
 
     // 初始化顶层存储
-    if (realWin.top === realWin.self) realWin.__m3u8Links = realWin.__m3u8Links || new Set();
+    try { if (realWin.top === realWin.self) realWin.__m3u8Links = realWin.__m3u8Links || new Set(); } catch (e) { /* cross-origin iframe */ }
 
     // ========== 注入页面拦截脚本（修复版） ==========
     const injectScript = `
@@ -32,34 +34,42 @@
             try {
                 let abs = new URL(url, location.href).href;
                 if (abs.includes('.m3u8') && /^https?:/.test(abs)) {
-                    if (top === self) window.__m3u8Links.add(abs);
-                    else top.postMessage({ type: 'M3U8_LINK_FOUND', url: abs }, '*');
+                      try { if (top === self) window.__m3u8Links.add(abs);
+                      else top.postMessage({ type: 'M3U8_LINK_FOUND', url: abs }, '*'); } catch(e) { /* cross-origin iframe */ }
                 }
             } catch(e) {}
         };
 
-        // ----- 修复 WebSocket 劫持（保留所有静态属性和原型）-----
-        const OriginalWebSocket = window.WebSocket;
-        class InterceptedWebSocket extends OriginalWebSocket {
-            constructor(url, protocols) {
-                super(url, protocols);
-                add(url);   // 拦截 m3u8 地址
-            }
+        // Firefox 对替换部分原生构造器更严格，可能抛 SecurityError。
+        // m3u8 通常来自 XHR/fetch/DOM，Firefox 下跳过 WebSocket 劫持以保持脚本可用。
+        if (!${isFirefox}) {
+            try {
+                const OriginalWebSocket = window.WebSocket;
+                class InterceptedWebSocket extends OriginalWebSocket {
+                    constructor(url, protocols) {
+                        if (protocols === undefined) super(url);
+                        else super(url, protocols);
+                        add(url);
+                    }
+                }
+                try { Object.setPrototypeOf(InterceptedWebSocket, OriginalWebSocket); } catch(e) {}
+                window.WebSocket = InterceptedWebSocket;
+            } catch(e) {}
         }
-        // 确保所有静态属性被完整继承（extends 已继承，但某些环境下可能缺失，手动复制一次确保）
-        Object.setPrototypeOf(InterceptedWebSocket, OriginalWebSocket);
-        // 替换全局 WebSocket
-        window.WebSocket = InterceptedWebSocket;
 
         // ----- XHR 劫持（无侵入）-----
-        const xhrOpen = XMLHttpRequest.prototype.open;
-        XMLHttpRequest.prototype.open = function(m, u) { this._url = u; return xhrOpen.apply(this, arguments); };
-        const xhrSend = XMLHttpRequest.prototype.send;
-        XMLHttpRequest.prototype.send = function(b) { if (this._url) add(this._url); return xhrSend.apply(this, arguments); };
+        try {
+            const xhrOpen = XMLHttpRequest.prototype.open;
+            XMLHttpRequest.prototype.open = function(m, u) { this._url = u; return xhrOpen.apply(this, arguments); };
+            const xhrSend = XMLHttpRequest.prototype.send;
+            XMLHttpRequest.prototype.send = function(b) { if (this._url) add(this._url); return xhrSend.apply(this, arguments); };
+        } catch(e) {}
 
         // ----- fetch 劫持（无侵入）-----
-        const origFetch = window.fetch;
-        window.fetch = function(i) { add(typeof i === 'string' ? i : i.url); return origFetch.apply(this, arguments); };
+        try {
+            const origFetch = window.fetch;
+            window.fetch = function(i) { add(typeof i === 'string' ? i : i.url); return origFetch.apply(this, arguments); };
+        } catch(e) {}
 
         // ----- 监听 DOM 变化与扫描（保持不变）-----
         new MutationObserver(muts => {
@@ -92,20 +102,49 @@
     s.remove();
 
     // ========== 顶层监听 iframe 消息 & 轮询 ==========
-    if (realWin.top === realWin.self) {
-        realWin.addEventListener('message', e => {
-            if (e.data?.type === 'M3U8_LINK_FOUND' && e.data.url && !realWin.__m3u8Links.has(e.data.url)) {
-                realWin.__m3u8Links.add(e.data.url);
-                if (realWin.__m3u8Links.size === 1) ensureButton();
-                const btn = document.getElementById('tm-m3u8-btn');
-                if (btn) btn.textContent = `🎬 1获取 m3u8 链接 (${realWin.__m3u8Links.size})`;
-            }
-        });
-        document.addEventListener('DOMContentLoaded', () => realWin.__m3u8Links?.size && ensureButton());
-        setInterval(() => { if (realWin.__m3u8Links?.size && !document.getElementById('tm-m3u8-btn')) ensureButton(); }, 1500);
-    }
+    try {
+        if (realWin.top === realWin.self) {
+            realWin.addEventListener('message', e => {
+                if (e.data?.type === 'M3U8_LINK_FOUND' && e.data.url && !realWin.__m3u8Links.has(e.data.url)) {
+                    realWin.__m3u8Links.add(e.data.url);
+                    if (realWin.__m3u8Links.size === 1) ensureButton();
+                    const btn = document.getElementById('tm-m3u8-btn');
+                    if (btn) btn.textContent = `🎬 1获取 m3u8 链接 (${realWin.__m3u8Links.size})`;
+                }
+            });
+            document.addEventListener('DOMContentLoaded', () => realWin.__m3u8Links?.size && ensureButton());
+            setInterval(() => { if (realWin.__m3u8Links?.size && !document.getElementById('tm-m3u8-btn')) ensureButton(); }, 1500);
+        }
+    } catch (e) { /* cross-origin iframe */ }
 
     // ========== 辅助函数 ==========
+    const copyText = (text) => {
+        try {
+            if (typeof GM_setClipboard === 'function') {
+                GM_setClipboard(text, 'text');
+                return Promise.resolve(true);
+            }
+        } catch (e) { }
+
+        if (navigator.clipboard && window.isSecureContext) {
+            return navigator.clipboard.writeText(text).then(() => true);
+        }
+
+        fallbackCopy(text);
+        return Promise.resolve(true);
+    };
+
+    // 复制降级（fallback for insecure context）
+    const fallbackCopy = (text) => {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand('copy'); alert('已复制！'); } catch (e) { alert('复制失败，请手动复制'); }
+        document.body.removeChild(ta);
+    };
     const sanitize = n => n ? n.replace(/[\\/:*?"<>|]/g, '_').trim() : 'untitled';
     const defaultFileName = (link) => {
         let t = document.title;
@@ -140,6 +179,20 @@
         if (typeof err === 'string') return err;
         return err.error || err.details || err.message || JSON.stringify(err);
     };
+    const getTaskStatus = (taskId) => new Promise((resolve, reject) => {
+        GM_xmlhttpRequest({
+            method: 'GET',
+            url: `${BACKEND_URL}/api/tasks/${encodeURIComponent(taskId)}`,
+            onload: resp => {
+                if (resp.status >= 200 && resp.status < 300) {
+                    try { resolve(JSON.parse(resp.responseText)); } catch (e) { reject('任务状态解析失败'); }
+                } else {
+                    reject(parseResponseError(resp, `状态码 ${resp.status}`));
+                }
+            },
+            onerror: err => reject(`网络错误: ${parseDownloadError(err)}`)
+        });
+    });
 
     const showNotification = (msg, type = 'success') => {
         let n = document.getElementById('tm-notification');
@@ -147,7 +200,7 @@
         n = document.createElement('div');
         n.id = 'tm-notification';
         Object.assign(n.style, {
-            position: 'fixed', bottom: '90px', right: '20px', zIndex: '10002', padding: '12px 20px',
+            position: 'fixed', bottom: '190px', right: '20px', zIndex: '10002', padding: '12px 20px',
             borderRadius: '8px', backgroundColor: type === 'success' ? '#4caf50' : '#f44336', color: 'white',
             fontSize: '14px', fontWeight: 'bold', fontFamily: 'sans-serif', boxShadow: '0 2px 10px rgba(0,0,0,0.2)',
             opacity: '0', transform: 'translateX(100%)', transition: 'opacity 0.3s ease, transform 0.3s ease', pointerEvents: 'none'
@@ -228,6 +281,19 @@
         });
     });
 
+    const triggerCompletedTaskDownload = (taskId, fileName, hooks = {}) => new Promise((resolve, reject) => {
+        GM_download({
+            url: `${BACKEND_URL}/api/tasks/${encodeURIComponent(taskId)}/download`,
+            name: `${fileName}.mp4`,
+            saveAs: false,
+            onprogress: e => {
+                if (hooks.onprogress) hooks.onprogress(e.loaded || 0, e.lengthComputable ? e.total : 0);
+            },
+            onload: () => resolve(),
+            onerror: err => reject(parseDownloadError(err))
+        });
+    });
+
     // ========== 进度弹窗组件 ==========
     const createProgressModal = (taskId, taskName, url) => {
         const modal = document.createElement('div');
@@ -287,10 +353,12 @@
     const monitorTask = async (taskId, taskName, url, opts = {}) => {
         const ui = createProgressModal(taskId, taskName, url);
         let ws, heartbeat, completed = false;
+        let pollTimer = null;
         let downloadDone = !opts.expectBrowserDownload;
         let taskDone = false;
         let taskFailed = false;
         let fallbackTimer = null;
+        let browserDownloadStarted = false;
         const tryFinalize = () => {
             if (!completed && taskDone && downloadDone) finalize(true);
         };
@@ -298,27 +366,66 @@
             if (completed) return;
             completed = true;
             clearTimeout(heartbeat); clearInterval(heartbeat);
+            clearInterval(pollTimer);
             clearTimeout(fallbackTimer);
             if (ws && ws.readyState === WebSocket.OPEN) ws.close();
             ui.close();
             showNotification(`${taskName} ${success ? '下载完成' : '下载失败' + (err ? ': ' + err : '')}`, success ? 'success' : 'error');
         };
+        const handleTaskUpdate = (task) => {
+            if (task.progress !== undefined) ui.updateProgress(task.progress);
+            if (task.status) ui.updateStatus(task.status, task.error);
+            const status = normalizeStatus(task.status);
+            if (status === 'completed') {
+                taskDone = true;
+                if (opts.downloadFileOnCompleted && !browserDownloadStarted) {
+                    browserDownloadStarted = true;
+                    ui.updateDownloadState('服务端完成，正在保存到浏览器下载目录...', '#666');
+                    opts.downloadFileOnCompleted({
+                        onprogress: (loaded, total) => {
+                            if (!total || total <= 0) {
+                                ui.updateDownloadState(`已接收 ${formatBytes(loaded)}`, '#666');
+                                return;
+                            }
+                            const pct = Math.min(100, Math.max(0, loaded / total * 100));
+                            ui.updateDownloadState(`${pct.toFixed(1)}% (${formatBytes(loaded)} / ${formatBytes(total)})`, '#666');
+                        }
+                    })
+                        .then(() => {
+                            downloadDone = true;
+                            ui.updateDownloadState('已保存到浏览器下载目录', '#4caf50');
+                            tryFinalize();
+                        })
+                        .catch(err => {
+                            ui.updateDownloadState(`失败: ${err || '未知错误'}`, '#f44336');
+                            finalize(false, err || '浏览器下载失败');
+                        });
+                    return;
+                }
+                tryFinalize();
+            } else if (status === 'failed') {
+                taskFailed = true;
+                finalize(false, task.error);
+            }
+        };
+        const poll = () => {
+            getTaskStatus(taskId)
+                .then(handleTaskUpdate)
+                .catch(err => {
+                    if (!completed && !taskDone && !taskFailed) finalize(false, err);
+                });
+        };
         const connect = () => {
+            if (isFirefox) {
+                poll();
+                pollTimer = setInterval(poll, 1500);
+                return;
+            }
             ws = new WebSocket(`${BACKEND_URL.replace('http', 'ws')}/api/tasks/${taskId}/ws`);
             ws.onopen = () => { heartbeat = setInterval(() => { if (ws?.readyState === WebSocket.OPEN) ws.send('ping'); }, 30000); };
             ws.onmessage = e => {
                 try {
-                    let task = JSON.parse(e.data);
-                    if (task.progress !== undefined) ui.updateProgress(task.progress);
-                    if (task.status) ui.updateStatus(task.status, task.error);
-                    const status = normalizeStatus(task.status);
-                    if (status === 'completed') {
-                        taskDone = true;
-                        tryFinalize();
-                    } else if (status === 'failed') {
-                        taskFailed = true;
-                        finalize(false, task.error);
-                    }
+                    handleTaskUpdate(JSON.parse(e.data));
                 } catch (e) { }
             };
             ws.onerror = () => { if (!completed && !taskDone && !taskFailed) finalize(false, 'WebSocket错误'); };
@@ -379,14 +486,11 @@
                 if (!fileName) return;
                 try {
                     const taskName = `${fileName}_${Date.now()}`;
-                    const task = await initDirectDownload(link, taskName);
-                    const monitor = await monitorTask(task.id, fileName, link, { expectBrowserDownload: true });
-                    monitor.markBrowserDownloadStarted();
-                    triggerDirectDownload(task.id, fileName, {
-                        onprogress: (loaded, total) => monitor.markBrowserDownloadProgress(loaded, total)
-                    })
-                        .then(() => monitor.markBrowserDownloadCompleted())
-                        .catch(err => monitor.markBrowserDownloadFailed(err));
+                    const taskId = await startDownload(link, taskName);
+                    await monitorTask(taskId, fileName, link, {
+                        expectBrowserDownload: true,
+                        downloadFileOnCompleted: hooks => triggerCompletedTaskDownload(taskId, fileName, hooks)
+                    });
                 } catch (err) { showNotification(`启动下载失败: ${err}`, 'error'); }
             };
             li.appendChild(span);
@@ -394,20 +498,20 @@
         });
         panel.querySelector('.close-modal').onclick = () => modal.remove();
         panel.querySelector('#copy-all').onclick = async () => {
-            try { await navigator.clipboard.writeText(links.join('\n')); panel.querySelector('#copy-all').textContent = '✅ 已复制！'; setTimeout(() => panel.querySelector('#copy-all').textContent = '📋 复制全部链接', 2000); } catch (e) { alert('复制失败'); }
+            try { await copyText(links.join('\n')); panel.querySelector('#copy-all').textContent = '✅ 已复制！'; setTimeout(() => panel.querySelector('#copy-all').textContent = '📋 复制全部链接', 2000); } catch (e) { fallbackCopy(links.join('\n')); }
         };
         modal.appendChild(panel);
         document.body.appendChild(modal);
     };
 
     function ensureButton() {
-        if (realWin.top !== realWin.self) return;
+        try { if (realWin.top !== realWin.self) return; } catch (e) { return; }
         if (document.getElementById('tm-m3u8-btn')) return;
         if (!realWin.__m3u8Links?.size) return;
         const btn = document.createElement('button');
         btn.id = 'tm-m3u8-btn';
         btn.textContent = `🎬 1获取 m3u8 链接 (${realWin.__m3u8Links.size})`;
-        Object.assign(btn.style, { position: 'fixed', bottom: '20px', right: '20px', zIndex: '9999', padding: '8px 16px', border: 'none', borderRadius: '6px', backgroundColor: '#fff', color: '#333', fontWeight: 'bold', cursor: 'pointer', boxShadow: '0 2px 6px rgba(0,0,0,0.2)', transition: 'background-color 0.2s ease', fontFamily: 'sans-serif' });
+        Object.assign(btn.style, { position: 'fixed', bottom: '120px', right: '20px', zIndex: '9999', padding: '8px 16px', border: 'none', borderRadius: '6px', backgroundColor: '#fff', color: '#333', fontWeight: 'bold', cursor: 'pointer', boxShadow: '0 2px 6px rgba(0,0,0,0.2)', transition: 'background-color 0.2s ease', fontFamily: 'sans-serif' });
         btn.onmouseenter = () => btn.style.backgroundColor = '#e0e0e0';
         btn.onmouseleave = () => btn.style.backgroundColor = '#fff';
         btn.onclick = () => { if (realWin.__m3u8Links?.size) showLinksModal(Array.from(realWin.__m3u8Links)); };
@@ -421,3 +525,4 @@
         setInterval(update, 1000);
     }
 })();
+
