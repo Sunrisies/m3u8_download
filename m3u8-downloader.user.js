@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         M3U8 下载助手（精简版）
 // @namespace    http://tampermonkey.net/
-// @version      3.6
+// @version      3.7
 // @description  拦截 m3u8，直传下载，自定义文件名，下载进度实时显示
 // @match        *://*/*
 // @run-at       document-start
@@ -9,18 +9,25 @@
 // @grant        GM_xmlhttpRequest
 // @grant        GM_download
 // @grant        GM_setClipboard
-// @connect      192.168.1.28
-// @connect      127.0.0.1
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @connect      *
 // ==/UserScript==
 
 (function () {
     'use strict';
-    const BACKEND_URL = 'http://192.168.1.28:8080';
+    let BACKEND_URL = (() => {
+        try { return GM_getValue('backendUrl', 'http://192.168.1.28:8080'); } catch (e) { return 'http://192.168.1.28:8080'; }
+    })();
     const realWin = unsafeWindow;
     const isFirefox = /\bFirefox\//.test(navigator.userAgent);
     const isMobile = /Mobi|Android|iPhone|iPad|iPod|IEMobile|Opera Mini/i.test(navigator.userAgent)
         || (typeof navigator.maxTouchPoints === 'number' && navigator.maxTouchPoints > 1 && window.innerWidth < 1024)
         || (typeof screen !== 'undefined' && screen.width < 768);
+
+    // ========== 下载队列 ==========
+    const downloadQueue = [];
+    let queueProcessing = false;
 
     if (realWin.__m3u8InterceptorInstalled) return;
     realWin.__m3u8InterceptorInstalled = true;
@@ -481,6 +488,116 @@
         };
     };
 
+    // ========== 下载队列 ==========
+    const addToQueue = (link, fileName) => {
+        downloadQueue.push({ link, fileName, status: 'pending' });
+        updateQueueUI();
+        if (!queueProcessing) processQueue();
+    };
+
+    const processQueue = async () => {
+        if (queueProcessing) return;
+        queueProcessing = true;
+        while (downloadQueue.length > 0 && queueProcessing) {
+            const item = downloadQueue[0];
+            item.status = 'downloading';
+            updateQueueUI();
+            try {
+                const taskName = `${item.fileName}_${Date.now()}`;
+                const taskId = await startDownload(item.link, taskName);
+                await monitorTask(taskId, item.fileName, item.link, {
+                    expectBrowserDownload: true,
+                    downloadFileOnCompleted: hooks => {
+                        if (isMobile) {
+                            const downloadUrl = `${BACKEND_URL}/api/tasks/${encodeURIComponent(taskId)}/download`;
+                            window.location.href = downloadUrl;
+                            return Promise.resolve();
+                        }
+                        return triggerCompletedTaskDownload(taskId, item.fileName, hooks);
+                    }
+                });
+                item.status = 'completed';
+            } catch (err) {
+                item.status = 'failed';
+                showNotification(`下载失败: ${err}`, 'error');
+            }
+            downloadQueue.shift();
+            updateQueueUI();
+        }
+        queueProcessing = false;
+        updateQueueUI();
+    };
+
+    const updateQueueUI = () => {
+        const el = document.getElementById('tm-queue-status');
+        if (!el) return;
+        const total = downloadQueue.length;
+        const completed = downloadQueue.filter(i => i.status === 'completed').length;
+        const failed = downloadQueue.filter(i => i.status === 'failed').length;
+        const downloading = downloadQueue.filter(i => i.status === 'downloading').length;
+        const pending = total - completed - failed - downloading;
+        const parts = [];
+        if (downloading > 0) parts.push(`📥 ${downloading} 下载中`);
+        if (pending > 0) parts.push(`⏳ ${pending} 待处理`);
+        if (completed > 0) parts.push(`✅ ${completed} 完成`);
+        if (failed > 0) parts.push(`❌ ${failed} 失败`);
+        el.textContent = `📋 队列: ${parts.length ? parts.join(' | ') : '空'}`;
+        el.style.backgroundColor = failed > 0 ? '#fff3e0' : '#f5f5f5';
+    };
+
+    // ========== 设置面板 ==========
+    const showSettingsModal = () => {
+        let existing = document.getElementById('tm-settings-modal');
+        if (existing) existing.remove();
+        const overlay = document.createElement('div');
+        overlay.id = 'tm-settings-modal';
+        Object.assign(overlay.style, {
+            position: 'fixed', top: 0, left: 0, width: '100%', height: '100%',
+            backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            zIndex: '10050', fontFamily: 'sans-serif'
+        });
+        const box = document.createElement('div');
+        Object.assign(box.style, {
+            backgroundColor: '#fff', borderRadius: '12px', width: '380px', maxWidth: '85%',
+            padding: '24px', boxShadow: '0 4px 24px rgba(0,0,0,0.25)'
+        });
+        box.innerHTML = `
+            <h3 style="margin:0 0 16px 0;font-size:16px">⚙️ 设置</h3>
+            <label style="display:block;font-size:13px;color:#555;margin-bottom:4px">后端下载服务地址</label>
+            <input type="text" id="tm-settings-url" value="${BACKEND_URL.replace(/"/g, '&quot;')}"
+                placeholder="http://192.168.1.28:8080"
+                style="width:100%;padding:10px 12px;margin-bottom:12px;border:1px solid #ccc;border-radius:6px;box-sizing:border-box;font-size:14px">
+            <div style="font-size:12px;color:#999;margin-bottom:16px;line-height:1.5">
+                💡 修改后立即生效，无需刷新页面。请确保服务端已在目标地址运行。
+            </div>
+            <div style="display:flex;justify-content:flex-end;gap:10px">
+                <button id="tm-settings-save" style="padding:8px 20px;background:#4caf50;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px">保存</button>
+                <button id="tm-settings-cancel" style="padding:8px 20px;background:#999;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px">取消</button>
+            </div>
+        `;
+        overlay.appendChild(box);
+        document.body.appendChild(overlay);
+        const input = box.querySelector('#tm-settings-url');
+        input.focus(); input.select();
+        box.querySelector('#tm-settings-cancel').onclick = () => overlay.remove();
+        overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+        box.querySelector('#tm-settings-save').onclick = () => {
+            const val = input.value.trim();
+            if (!val) { showNotification('请输入有效的服务端地址', 'error'); return; }
+            try {
+                new URL(val);
+            } catch (e) {
+                showNotification('地址格式不正确，需包含 http:// 或 https://', 'error');
+                return;
+            }
+            GM_setValue('backendUrl', val);
+            BACKEND_URL = val;
+            overlay.remove();
+            showNotification('后端地址已更新', 'success');
+        };
+        input.onkeypress = e => { if (e.key === 'Enter') box.querySelector('#tm-settings-save').click(); };
+    };
+
     const showLinksModal = (links) => {
         let existing = document.getElementById('tm-m3u8-modal');
         if (existing) existing.remove();
@@ -490,7 +607,7 @@
         modal.onclick = e => { if (e.target === modal) modal.remove(); };
         const panel = document.createElement('div');
         Object.assign(panel.style, { backgroundColor: '#fff', borderRadius: '8px', width: '80%', maxWidth: '800px', maxHeight: '80%', display: 'flex', flexDirection: 'column', boxShadow: '0 4px 20px rgba(0,0,0,0.3)', overflow: 'hidden' });
-        panel.innerHTML = `<div style="padding:12px 20px;border-bottom:1px solid #e0e0e0;display:flex;justify-content:space-between;align-items:center;background:#f5f5f5"><h3 style="margin:0">📺 m3u8 链接 (${links.length})</h3><button class="close-modal" style="background:none;border:none;font-size:20px;cursor:pointer;color:#666">✖</button></div><button id="copy-all" style="margin:0 20px 12px 20px;padding:6px 12px;background:#4caf50;color:white;border:none;border-radius:4px;cursor:pointer;font-size:14px;align-self:flex-start">📋 复制全部链接</button><div style="flex:1;overflow-y:auto;padding:16px 20px"><ul style="margin:0;padding-left:20px;list-style:decimal" id="link-list"></ul></div>`;
+        panel.innerHTML = `<div style="padding:12px 20px;border-bottom:1px solid #e0e0e0;display:flex;justify-content:space-between;align-items:center;background:#f5f5f5"><h3 style="margin:0">📺 m3u8 链接 (${links.length})</h3><button class="close-modal" style="background:none;border:none;font-size:20px;cursor:pointer;color:#666">✖</button></div><div id="tm-queue-status" style="padding:8px 20px;font-size:12px;color:#666;background:#f5f5f5;border-bottom:1px solid #e0e0e0">📋 队列: 空</div><button id="copy-all" style="margin:0 20px 8px 20px;padding:6px 12px;background:#4caf50;color:white;border:none;border-radius:4px;cursor:pointer;font-size:14px;align-self:flex-start">📋 复制全部链接</button><div style="flex:1;overflow-y:auto;padding:8px 20px 16px 20px"><ul style="margin:0;padding-left:20px;list-style:decimal" id="link-list"></ul></div>`;
         const listContainer = panel.querySelector('#link-list');
         links.forEach(link => {
             const li = document.createElement('li');
@@ -510,9 +627,6 @@
                         expectBrowserDownload: true,
                         downloadFileOnCompleted: hooks => {
                             if (isMobile) {
-                                // 移动端：location.href 跳转下载（最可靠）
-                                // 不走 GM_download（文件名报错、挂起）、不走 window.open（弹窗拦截）
-                                // 服务端返回 Content-Disposition: attachment → 浏览器弹出下载，不会离开当前页
                                 const downloadUrl = `${BACKEND_URL}/api/tasks/${encodeURIComponent(taskId)}/download`;
                                 window.location.href = downloadUrl;
                                 return Promise.resolve();
@@ -522,7 +636,25 @@
                     });
                 } catch (err) { showNotification(`启动下载失败: ${err}`, 'error'); }
             };
-            li.appendChild(span);
+            const queueBtn = document.createElement('button');
+            queueBtn.textContent = '➕';
+            queueBtn.title = '加入下载队列';
+            Object.assign(queueBtn.style, {
+                marginLeft: '6px', padding: '2px 6px', border: '1px solid #ccc',
+                borderRadius: '4px', backgroundColor: '#fff', cursor: 'pointer',
+                fontSize: '13px', verticalAlign: 'middle'
+            });
+            queueBtn.onclick = async (e) => {
+                e.stopPropagation();
+                let fileName = await showFileNameDialog(link);
+                if (fileName) addToQueue(link, fileName);
+            };
+            const wrapper = document.createElement('div');
+            wrapper.style.cssText = 'display:flex;align-items:center;gap:4px';
+            span.style.maxWidth = 'calc(100% - 50px)';
+            wrapper.appendChild(span);
+            wrapper.appendChild(queueBtn);
+            li.appendChild(wrapper);
             listContainer.appendChild(li);
         });
         panel.querySelector('.close-modal').onclick = () => modal.remove();
@@ -545,6 +677,23 @@
         btn.onmouseleave = () => btn.style.backgroundColor = '#fff';
         btn.onclick = () => { if (realWin.__m3u8Links?.size) showLinksModal(Array.from(realWin.__m3u8Links)); };
         document.body.appendChild(btn);
+
+        // 设置按钮
+        const settingsBtn = document.createElement('button');
+        settingsBtn.id = 'tm-m3u8-settings';
+        settingsBtn.textContent = '⚙️';
+        Object.assign(settingsBtn.style, {
+            position: 'fixed', bottom: '175px', right: '20px', zIndex: '9999',
+            padding: '8px 12px', border: 'none', borderRadius: '6px',
+            backgroundColor: '#fff', color: '#333', fontWeight: 'bold',
+            cursor: 'pointer', boxShadow: '0 2px 6px rgba(0,0,0,0.2)',
+            transition: 'background-color 0.2s ease', fontFamily: 'sans-serif',
+            fontSize: '16px', lineHeight: '1'
+        });
+        settingsBtn.onmouseenter = () => settingsBtn.style.backgroundColor = '#e0e0e0';
+        settingsBtn.onmouseleave = () => settingsBtn.style.backgroundColor = '#fff';
+        settingsBtn.onclick = () => showSettingsModal();
+        document.body.appendChild(settingsBtn);
         let last = -1;
         const update = () => {
             let c = realWin.__m3u8Links?.size || 0;
