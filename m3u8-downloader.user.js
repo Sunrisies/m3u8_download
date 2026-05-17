@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         M3U8 下载助手（精简版）
 // @namespace    http://tampermonkey.net/
-// @version      3.4
+// @version      3.6
 // @description  拦截 m3u8，直传下载，自定义文件名，下载进度实时显示
 // @match        *://*/*
 // @run-at       document-start
@@ -18,6 +18,9 @@
     const BACKEND_URL = 'http://192.168.1.28:8080';
     const realWin = unsafeWindow;
     const isFirefox = /\bFirefox\//.test(navigator.userAgent);
+    const isMobile = /Mobi|Android|iPhone|iPad|iPod|IEMobile|Opera Mini/i.test(navigator.userAgent)
+        || (typeof navigator.maxTouchPoints === 'number' && navigator.maxTouchPoints > 1 && window.innerWidth < 1024)
+        || (typeof screen !== 'undefined' && screen.width < 768);
 
     if (realWin.__m3u8InterceptorInstalled) return;
     realWin.__m3u8InterceptorInstalled = true;
@@ -145,7 +148,9 @@
         try { document.execCommand('copy'); alert('已复制！'); } catch (e) { alert('复制失败，请手动复制'); }
         document.body.removeChild(ta);
     };
-    const sanitize = n => n ? n.replace(/[\\/:*?"<>|]/g, '_').trim() : 'untitled';
+    const sanitize = n => n
+        ? n.replace(/[\\/:*?"<>|\x00-\x1f\x7f]/g, '_').replace(/_+/g, '_').replace(/^_|_+$/g, '').trim() || 'untitled'
+        : 'untitled';
     const defaultFileName = (link) => {
         let t = document.title;
         if (t?.trim()) return sanitize(t);
@@ -357,6 +362,7 @@
         let downloadDone = !opts.expectBrowserDownload;
         let taskDone = false;
         let taskFailed = false;
+        let wsFailed = false;
         let fallbackTimer = null;
         let browserDownloadStarted = false;
         const tryFinalize = () => {
@@ -416,7 +422,11 @@
                 });
         };
         const connect = () => {
-            if (isFirefox) {
+            // 以下情况跳过 WebSocket（不稳定或不可用），使用轮询：
+            //   - Firefox（构造器替换限制）
+            //   - 移动端（WS 兼容性差、HTTPS 混合内容拦截、连接不稳定）
+            //   - HTTPS 页面 + HTTP 后端（ws:// 被混合内容策略拦截）
+            if (isFirefox || isMobile || (window.isSecureContext && BACKEND_URL.startsWith('http://'))) {
                 poll();
                 pollTimer = setInterval(poll, 1500);
                 return;
@@ -428,12 +438,21 @@
                     handleTaskUpdate(JSON.parse(e.data));
                 } catch (e) { }
             };
-            ws.onerror = () => { if (!completed && !taskDone && !taskFailed) finalize(false, 'WebSocket错误'); };
+            ws.onerror = () => {
+                if (!completed && !taskDone && !taskFailed && !wsFailed) {
+                    wsFailed = true;
+                    clearTimeout(heartbeat); clearInterval(heartbeat);
+                    // WebSocket 连接失败，降级到轮询
+                    poll();
+                    pollTimer = setInterval(poll, 1500);
+                }
+            };
             ws.onclose = () => {
-                if (completed || taskDone || taskFailed) return;
-                fallbackTimer = setTimeout(() => {
-                    if (!completed && !taskDone && !taskFailed) finalize(false, '连接中断');
-                }, 1500);
+                if (completed || taskDone || taskFailed || wsFailed) return;
+                // WebSocket 意外关闭，降级到轮询
+                clearTimeout(heartbeat); clearInterval(heartbeat);
+                poll();
+                pollTimer = setInterval(poll, 1500);
             };
         };
         connect();
@@ -489,7 +508,17 @@
                     const taskId = await startDownload(link, taskName);
                     await monitorTask(taskId, fileName, link, {
                         expectBrowserDownload: true,
-                        downloadFileOnCompleted: hooks => triggerCompletedTaskDownload(taskId, fileName, hooks)
+                        downloadFileOnCompleted: hooks => {
+                            if (isMobile) {
+                                // 移动端：location.href 跳转下载（最可靠）
+                                // 不走 GM_download（文件名报错、挂起）、不走 window.open（弹窗拦截）
+                                // 服务端返回 Content-Disposition: attachment → 浏览器弹出下载，不会离开当前页
+                                const downloadUrl = `${BACKEND_URL}/api/tasks/${encodeURIComponent(taskId)}/download`;
+                                window.location.href = downloadUrl;
+                                return Promise.resolve();
+                            }
+                            return triggerCompletedTaskDownload(taskId, fileName, hooks);
+                        }
                     });
                 } catch (err) { showNotification(`启动下载失败: ${err}`, 'error'); }
             };
