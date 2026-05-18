@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         M3U8 下载助手（精简版）
 // @namespace    http://tampermonkey.net/
-// @version      3.7
+// @version      3.8
 // @description  拦截 m3u8，直传下载，自定义文件名，下载进度实时显示
 // @match        *://*/*
 // @run-at       document-start
@@ -28,6 +28,96 @@
     // ========== 下载队列 ==========
     const downloadQueue = [];
     let queueProcessing = false;
+
+    // ========== 主题系统 ==========
+    let currentTheme = 'light';
+    try { currentTheme = GM_getValue('theme', 'light'); } catch (e) { }
+    const t = (lightVal, darkVal) => currentTheme === 'dark' ? darkVal : lightVal;
+    const injectDarkStyles = () => {
+        if (document.getElementById('tm-dark-style')) return;
+        const style = document.createElement('style');
+        style.id = 'tm-dark-style';
+        style.textContent = `
+[data-tm-theme="dark"] [id^="download-progress-"]:not(.tm-minimized) {
+    background-color: #1e1e1e !important;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.5) !important;
+}
+[data-tm-theme="dark"] [id^="download-progress-"] .full-view > div:first-child {
+    background-color: #2d2d2d !important;
+    border-bottom-color: #444 !important;
+}
+[data-tm-theme="dark"] [id^="download-progress-"] .full-view > div:first-child button {
+    color: #aaa !important;
+}
+[data-tm-theme="dark"] [id^="download-progress-"] .status-text {
+    color: #aaa !important;
+}
+[data-tm-theme="dark"] [id^="download-progress-"] .download-text {
+    color: #999 !important;
+}
+[data-tm-theme="dark"] [id^="download-progress-"] .full-view > div:last-child {
+    color: #888 !important;
+}
+[data-tm-theme="dark"] #tm-m3u8-modal > div {
+    background-color: #1e1e1e !important;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.5) !important;
+}
+[data-tm-theme="dark"] #tm-m3u8-modal > div > div:first-child {
+    background-color: #2d2d2d !important;
+    border-bottom-color: #444 !important;
+}
+[data-tm-theme="dark"] #tm-m3u8-modal button.close-modal {
+    color: #aaa !important;
+}
+[data-tm-theme="dark"] #tm-queue-status {
+    background-color: #2d2d2d !important;
+    border-bottom-color: #444 !important;
+    color: #aaa !important;
+}
+[data-tm-theme="dark"] #tm-m3u8-modal li span:first-child {
+    background-color: #2a2a2a !important;
+    color: #90caf9 !important;
+}
+[data-tm-theme="dark"] #tm-m3u8-modal .tm-queue-btn {
+    background-color: #444 !important;
+    color: #e0e0e0 !important;
+    border-color: #555 !important;
+}
+[data-tm-theme="dark"] #tm-settings-modal > div {
+    background-color: #1e1e1e !important;
+    color: #e0e0e0 !important;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.5) !important;
+}
+[data-tm-theme="dark"] #tm-settings-modal label {
+    color: #bbb !important;
+}
+[data-tm-theme="dark"] #tm-settings-modal input {
+    background-color: #333 !important;
+    color: #e0e0e0 !important;
+    border-color: #555 !important;
+}
+[data-tm-theme="dark"] #tm-settings-modal .tm-settings-hint {
+    color: #888 !important;
+}
+[data-tm-theme="dark"] #tm-settings-btn,
+[data-tm-theme="dark"] #tm-m3u8-btn {
+    background-color: #333 !important;
+    color: #e0e0e0 !important;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.4) !important;
+}
+[data-tm-theme="dark"] #copy-all {
+    background-color: #388e3c !important;
+}
+`;
+        document.head.appendChild(style);
+    };
+    const applyTheme = (theme) => {
+        currentTheme = theme;
+        try { GM_setValue('theme', theme); } catch (e) { }
+        document.documentElement.setAttribute('data-tm-theme', theme);
+        injectDarkStyles();
+    };
+    document.documentElement.setAttribute('data-tm-theme', currentTheme);
 
     if (realWin.__m3u8InterceptorInstalled) return;
     realWin.__m3u8InterceptorInstalled = true;
@@ -328,8 +418,10 @@
             modal.style.width = min ? '50px' : '320px';
             modal.style.height = min ? '50px' : 'auto';
             modal.style.borderRadius = min ? '50%' : '8px';
-            modal.style.backgroundColor = min ? 'transparent' : '#fff';
-            modal.style.boxShadow = min ? 'none' : '0 4px 20px rgba(0,0,0,0.3)';
+            modal.style.backgroundColor = min ? 'transparent' : t('#fff', '#1e1e1e');
+            modal.style.boxShadow = min ? 'none' : t('0 4px 20px rgba(0,0,0,0.3)', '0 4px 20px rgba(0,0,0,0.5)');
+            if (min) modal.classList.add('tm-minimized');
+            else modal.classList.remove('tm-minimized');
         };
         minimizeBtn.onclick = () => setMinimized(true);
         closeBtn.onclick = () => modal.remove();
@@ -563,11 +655,18 @@
         });
         box.innerHTML = `
             <h3 style="margin:0 0 16px 0;font-size:16px">⚙️ 设置</h3>
+
+            <label style="display:block;font-size:13px;color:#555;margin-bottom:4px">主题切换</label>
+            <div style="display:flex;gap:10px;margin-bottom:16px">
+                <button id="tm-theme-light" style="flex:1;padding:8px 12px;border:2px solid ${currentTheme === 'light' ? '#4caf50' : '#ccc'};border-radius:6px;background:${currentTheme === 'light' ? '#e8f5e9' : '#f5f5f5'};color:#333;cursor:pointer;font-size:13px;font-weight:bold">☀️ 浅色</button>
+                <button id="tm-theme-dark" style="flex:1;padding:8px 12px;border:2px solid ${currentTheme === 'dark' ? '#4caf50' : '#ccc'};border-radius:6px;background:${currentTheme === 'dark' ? '#1e1e1e' : '#f5f5f5'};color:${currentTheme === 'dark' ? '#e0e0e0' : '#333'};cursor:pointer;font-size:13px;font-weight:bold">🌙 深色</button>
+            </div>
+
             <label style="display:block;font-size:13px;color:#555;margin-bottom:4px">后端下载服务地址</label>
             <input type="text" id="tm-settings-url" value="${BACKEND_URL.replace(/"/g, '&quot;')}"
                 placeholder="http://192.168.1.28:8080"
                 style="width:100%;padding:10px 12px;margin-bottom:12px;border:1px solid #ccc;border-radius:6px;box-sizing:border-box;font-size:14px">
-            <div style="font-size:12px;color:#999;margin-bottom:16px;line-height:1.5">
+            <div class="tm-settings-hint" style="font-size:12px;color:#999;margin-bottom:16px;line-height:1.5">
                 💡 修改后立即生效，无需刷新页面。请确保服务端已在目标地址运行。
             </div>
             <div style="display:flex;justify-content:flex-end;gap:10px">
@@ -575,6 +674,20 @@
                 <button id="tm-settings-cancel" style="padding:8px 20px;background:#999;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px">取消</button>
             </div>
         `;
+        // 主题切换
+        const lightBtn = box.querySelector('#tm-theme-light');
+        const darkBtn = box.querySelector('#tm-theme-dark');
+        if (lightBtn && darkBtn) {
+            const setActiveTheme = (theme) => {
+                lightBtn.style.borderColor = theme === 'light' ? '#4caf50' : '#ccc';
+                lightBtn.style.backgroundColor = theme === 'light' ? '#e8f5e9' : '#f5f5f5';
+                darkBtn.style.borderColor = theme === 'dark' ? '#4caf50' : '#ccc';
+                darkBtn.style.backgroundColor = theme === 'dark' ? '#1e1e1e' : '#f5f5f5';
+                darkBtn.style.color = theme === 'dark' ? '#e0e0e0' : '#333';
+            };
+            lightBtn.onclick = () => { applyTheme('light'); setActiveTheme('light'); };
+            darkBtn.onclick = () => { applyTheme('dark'); setActiveTheme('dark'); };
+        }
         overlay.appendChild(box);
         document.body.appendChild(overlay);
         const input = box.querySelector('#tm-settings-url');
@@ -673,8 +786,8 @@
         btn.id = 'tm-m3u8-btn';
         btn.textContent = `🎬 1获取 m3u8 链接 (${realWin.__m3u8Links.size})`;
         Object.assign(btn.style, { position: 'fixed', bottom: '120px', right: '20px', zIndex: '9999', padding: '8px 16px', border: 'none', borderRadius: '6px', backgroundColor: '#fff', color: '#333', fontWeight: 'bold', cursor: 'pointer', boxShadow: '0 2px 6px rgba(0,0,0,0.2)', transition: 'background-color 0.2s ease', fontFamily: 'sans-serif' });
-        btn.onmouseenter = () => btn.style.backgroundColor = '#e0e0e0';
-        btn.onmouseleave = () => btn.style.backgroundColor = '#fff';
+        btn.onmouseenter = () => btn.style.backgroundColor = t('#e0e0e0', '#555');
+        btn.onmouseleave = () => btn.style.backgroundColor = '';
         btn.onclick = () => { if (realWin.__m3u8Links?.size) showLinksModal(Array.from(realWin.__m3u8Links)); };
         document.body.appendChild(btn);
 
@@ -690,8 +803,8 @@
             transition: 'background-color 0.2s ease', fontFamily: 'sans-serif',
             fontSize: '16px', lineHeight: '1'
         });
-        settingsBtn.onmouseenter = () => settingsBtn.style.backgroundColor = '#e0e0e0';
-        settingsBtn.onmouseleave = () => settingsBtn.style.backgroundColor = '#fff';
+        settingsBtn.onmouseenter = () => settingsBtn.style.backgroundColor = t('#e0e0e0', '#555');
+        settingsBtn.onmouseleave = () => settingsBtn.style.backgroundColor = '';
         settingsBtn.onclick = () => showSettingsModal();
         document.body.appendChild(settingsBtn);
         let last = -1;
